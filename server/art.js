@@ -33,6 +33,7 @@ import { resolvePick } from "./modelpick.js";
 import { animaGraph, coverGraph, coverPrompt, COVER_NODES, ideogramGraph, ideogramPassSeeds, nextIdeogramSeed, isRefusalCard, ideogramRefusalMessage, checkpointGraph, zImageGraph, krea2Graph, videoGraph, videoPrompt, alignFrames, videoEngine, enhanceGraph, restyleGraph, h3SparseFor } from "./workflow.js";
 /* An engine failure as a sentence, the raw text behind Details (the Video screen's). */
 import { plainVideoFailure } from "./video-plain.js";
+import { chosenAttention, vendorOf } from "./comfyargs.js";
 import { joinClips } from "./clipjoin.js";
 import { runLrc, LRC_SCRIPT, stderrTail } from "./lrc.js";
 import { buildCustom, assignedTo } from "./customWorkflows.js";
@@ -188,6 +189,23 @@ export function attentionOptions(info) {
   if (Array.isArray(spec[0])) return spec[0].map(String);
   if (spec[0] === "COMBO" && Array.isArray(spec[1]?.options)) return spec[1].options.map(String);
   return [];
+}
+
+/**
+ * How long a clip may take before it counts as hung: 4x the estimate plus five
+ * minutes for a cold model load, never under 15 minutes. Generous on purpose:
+ * killing a nearly-finished render wastes everything spent on it.
+ *
+ * THE ESTIMATE IS AN NVIDIA ONE. The cost curve was fitted on the lab's card,
+ * so on any other card (AMD, Intel, one nobody could read) it gets three times
+ * the room. MEASURED 2026-09-24 on an RX 9060 XT (16 GB, ROCm): H3 at
+ * 1344x768, 124 frames, 8 steps took 1617 s against a 299 s estimate (5.4x).
+ * The old 4x limit gave up at 1497 s, two minutes before the clip landed, and
+ * the finished file was never filed.
+ */
+export function clipBudgetMs(expectedSeconds, vendor) {
+  const slow = vendor === "nvidia" ? 1 : 3;
+  return Math.max(900_000, (expectedSeconds * 4 * slow + 300) * 1000);
 }
 
 /**
@@ -636,6 +654,8 @@ export class ArtRunner extends EventEmitter {
    *     Somebody who picked PyTorch there — to debug, or because a model
    *     misbehaved — asked for it, and a per-graph node would overrule them
    *     without a word. Only "no choice" or "Comfy Kitchen" lets CK through.
+   *     The AMD/Intel fix's own PyTorch value is not a choice (comfyargs.js
+   *     chosenAttention): the launcher shows it and a Save stores it.
    *  2. config.video.engines.h3.attention says "ck" (see the measurement there).
    *  3. The RUNNING engine offers the option. ModelAttentionBackend lists
    *     "comfy kitchen attention" only when comfy_kitchen int8 is available, and
@@ -645,7 +665,8 @@ export class ArtRunner extends EventEmitter {
    *     fails is "not offered", never an exception.
    */
   async h3Attention() {
-    const chosen = config.comfy?.options?.attention;
+    const chosen = chosenAttention(config.comfy?.options?.attention,
+      { fix: config.comfy?.amdFix, vendor: vendorOf(config.gpu, config.torchBackend) });
     if (chosen && chosen !== "--use-ck-attention") return null;
     if ((config.video.engines.h3?.attention ?? "ck") !== "ck") return null;
     return (await this.#kitchenOffered()) ? "ck" : null;
@@ -2121,9 +2142,7 @@ export class ArtRunner extends EventEmitter {
     const stepScale = engine === "ltx" ? 1 : (job.steps ?? v.steps) / 8;
     const expected = v.costFixedSeconds
       + v.costRate * Math.pow((px * frames) / 1e6, v.costExponent) * stepScale;
-    // 4x the estimate plus five minutes for a cold model load. Generous on
-    // purpose: killing a nearly-finished render wastes everything spent on it.
-    const budgetMs = Math.max(900_000, (expected * 4 + 300) * 1000);
+    const budgetMs = clipBudgetMs(expected, vendorOf(config.gpu, config.torchBackend));
 
     /* AT MOST TWO SUBMISSIONS, and the second one is rare — see the ENOENT arm
      * below for the only thing that reaches it. The deadline is per attempt

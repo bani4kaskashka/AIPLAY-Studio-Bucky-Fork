@@ -19,7 +19,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { WebSocketServer } from "ws";
-import { config, PREF_PATHS, prefsSnapshot, loraStepsOf, whisperPython, defaultWhisperPython, prefChosen, prefOrigin, applyMachineDefault, forgetPref, overrideForSession, sessionOverride, LITERAL_DEFAULTS } from "./config.js";
+import { config, PREF_PATHS, prefsSnapshot, loraStepsOf, whisperPython, defaultWhisperPython, prefChosen, prefOrigin, applyMachineDefault, forgetPref, overrideForSession, sessionOverride, LITERAL_DEFAULTS, refreshTaoMate } from "./config.js";
 import { createVfxRoutes } from "./vfx/routes.js";
 import { createScoreRoutes } from "./score/routes.js";
 import { createAuditions, createAuditionRoutes, createAuditionSourceInspector, audioHash, exactJobReceipt, finishReplacement } from "./music/auditions.js";
@@ -1168,6 +1168,10 @@ async function modelsDisk() {
 }
 const ggufSetup = new GgufSetup();
 models.on("update", () => push(jobs.snapshot()));
+/* A Fast-setting file (TaoMate) that lands is used at once, not after a restart. */
+models.on("ready", (id) => {
+  if (CATALOG.find((c) => c.id === id)?.fastPathFor === "video") refreshTaoMate();
+});
 
 /**
  * MAY A CLIP BE RENDERED — and if so, on WHICH engine.
@@ -7211,7 +7215,8 @@ const server = http.createServer(async (req, res) => {
         const plan = videoPlan({ ...b, refImages, refAudios }, { engineKey: eng, eng: videoEngine(eng),
           h3: h3Status({ gpu: gpuStatus(), ram: ramStatus(), cpuOnly: cpuOnlyEngine(), vaeMeasured: h3VaeMeasured() }), framed: !!(firstFrame || lastFrame),
           control: !!control.video });
-        if (plan.refusal) return json(res, 400, { error: plan.refusal.error, reason: plan.refusal.reason });
+        if (plan.refusal) return json(res, 400, { error: plan.refusal.error, reason: plan.refusal.reason,
+          ...(plan.refusal.needsModel ? { needsModel: plan.refusal.needsModel } : {}) });
         /* Soundtrack works on BOTH engines now. LTX freezes the audio latent
          * (measured r=0.995 mel); H3 freezes AND anchors so the DiT can read
          * the vocal while the output plays the real track (measured r=0.984

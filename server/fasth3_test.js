@@ -212,7 +212,7 @@ test("the route, the job and the Video screen carry the attention choice; refere
   /* References on FastH3 or LTX: refused by the plan (server/video-plain.js),
    * in the one sentence the page and make_clip show. */
   assert.match(index, /const plan = videoPlan\(\{ \.\.\.b, refImages, refAudios \}/);
-  assert.match(index, /if \(plan\.refusal\) return json\(res, 400, \{ error: plan\.refusal\.error, reason: plan\.refusal\.reason \}\);/);
+  assert.match(index, /if \(plan\.refusal\) return json\(res, 400, \{ error: plan\.refusal\.error, reason: plan\.refusal\.reason,\s*\.\.\.\(plan\.refusal\.needsModel \? \{ needsModel: plan\.refusal\.needsModel \} : \{\}\) \}\);/);
   const art = read("./art.js");
   assert.match(art, /attention: await this\.videoAttention\(job\),/);
   const va = art.slice(art.indexOf("async videoAttention(job)"), art.indexOf("async videoAttention(job)") + 600);

@@ -82,6 +82,16 @@ function onDisk(sub, name) {
   return bases.some((b) => { try { return fs.statSync(path.join(b, sub, String(name))).size > 0; } catch { return false; } });
 }
 
+/* The TaoMate 3-step files, in pick order (the full conversion, then Kijai's
+ * 182 MB rank-19 average). OPTIONAL: nothing asks for them at start. They are
+ * read at import like every other file, again when a download finishes
+ * (refreshTaoMate below), and a render asking for 3 steps without one is
+ * refused with the download offered (video-plain.js videoPlan). */
+export const TAOMATE_FILES = [
+  "taomate_h3_3step_comfy.safetensors",
+  "minimax_h3_taomate_3step_lora_avg_rank_19_bf16.safetensors",
+];
+
 /** The step count a turbo LoRA was distilled for, read off its file name
  *  (`_8step_`), or null for a name that does not say. One reader for the H3
  *  step defaults below, /api/status and mv/plancost.js loraSteps(). */
@@ -1303,11 +1313,9 @@ export const config = {
      * it comes back overcooked. Falls back to the 4-step build on a machine
      * without the file, which is what 2 and 3 steps ran before this existed.
      * The reference path is left alone: this file was not trained on ref2va. */
-    turboLora3: pick("loras",
-      "taomate_h3_3step_comfy.safetensors",
-      // Kijai's rank-19 average of the same LoRA (182 MB against 2.48 GB): the
-      // small alternative, taken when the full conversion is not on disk.
-      "minimax_h3_taomate_3step_lora_avg_rank_19_bf16.safetensors",
+    // TAOMATE_FILES: the full conversion, then Kijai's rank-19 average of the
+    // same LoRA (182 MB against 2.48 GB), taken when the full one is not on disk.
+    turboLora3: pick("loras", ...TAOMATE_FILES,
       "minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors"),
     // At or below this many steps, the 3-step distillation is the right one.
     turbo3MaxSteps: 3,
@@ -1965,6 +1973,22 @@ export const config = {
    * default is this file's count, which can be 8 where standard is 4
    * (server/mv/clipsteps.js defaultClipSteps). */
   h3.refTurboSteps = stepsOnDisk(h3.refTurboLora);
+}
+
+/** Look for TaoMate again, after a download lands (server/index.js, the
+ *  downloader's "ready"), so Fast and 3 steps work without a restart. Moves
+ *  only what the file decides: the 3-step slot, turboBuilds.three and the
+ *  Fast default. Standard and the person's own step count stay as they are.
+ *  Returns whether a TaoMate file is on disk now. */
+export function refreshTaoMate() {
+  const h3 = config.video.engines.h3;
+  const found = TAOMATE_FILES.find((n) => onDisk("loras", n));
+  if (found) h3.turboLora3 = found;
+  const three = !!found && loraStepsOf(found) === 3;
+  h3.turboBuilds = { ...h3.turboBuilds, three };
+  const { four } = h3.turboBuilds;
+  h3.stepDefaults = { ...h3.stepDefaults, fast: three ? 3 : four ? 4 : h3.stepDefaults.standard };
+  return three;
 }
 
 /* THE CARD TIERS' SIZES in H3's list, from server/h3tier.js (the one source),

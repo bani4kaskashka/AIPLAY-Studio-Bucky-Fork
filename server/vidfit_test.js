@@ -324,7 +324,9 @@ test("§5 the plan: the card's size when none is named, each change said", () =>
 });
 
 test("§5 the plan: steps and sparse attention", () => {
-  const eng = config.video.engines.h3;
+  /* A disk with the Fast setting's file: without it 3 steps is refused
+   * (taomate_test.js), and this section is about what Fast does. */
+  const eng = { ...config.video.engines.h3, turboBuilds: { ...config.video.engines.h3.turboBuilds, three: true } };
   const refs = plain.videoPlan({ prompt: "<Picture 1> walks", steps: 3, refImages: ["a.png"] }, { engineKey: "h3", eng, h3: null });
   assert.equal(refs.steps, 4);
   assert.equal(refs.warnings.find((w) => w.id === "steps").text,

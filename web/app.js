@@ -7929,6 +7929,11 @@ function vidPaint() {
     : " · full-model path";
   const mismatch = !fixedPath && midFile !== null && midFile < 8 && st > midFile && st > t4 && st <= t8;
   const betweenBuilds = !fixedPath && midFile === 8 && st > t4 && st < 8;
+  /* 3 steps is TaoMate's, and TaoMate is optional: without it the server
+   * refuses the render and offers the download (video-plain.js). Said here
+   * first, while the slider sits there. */
+  const noTaoMate = !fixedPath && !hasRefs && !!eng.turboBuilds && !eng.turboBuilds.three
+    && st <= (eng.turbo3MaxSteps ?? 3);
 
   $("vidEst").textContent = on
     ? "about " + fmt(secs) + " once the engine is idle · " + frames + " frames at " + fps + " fps"
@@ -7939,7 +7944,9 @@ function vidPaint() {
       + (mismatch ? " · ⚠ no " + (hasRefs ? "reference " : "") + "build for " + st + " steps on this disk: use "
           + fourFile + " (the " + fourFile + "-step build) or 13+ (the bare model)" : "")
       + (betweenBuilds ? " · ⚠ between the " + fourFile + "-step and 8-step builds: use " + fourFile + " or 8" : "")
-      + stepPath
+      + (noTaoMate ? " · ⚠ " + st + " steps needs TaoMate (182 MB): download it, or use 4 or more" : "")
+      // No path to name: without TaoMate, 3 steps does not render.
+      + (noTaoMate ? "" : stepPath)
       // Reference tokens are attended on every step, so they cost time. One
       // measured point: one picture at 864x480x124 added ~10% — more and
       // larger references cost more.

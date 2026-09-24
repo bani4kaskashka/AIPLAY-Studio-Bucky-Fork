@@ -63,6 +63,14 @@ export function fastNote(eng) {
     : "3 steps on the TaoMate build: as sharp as the 8-step build, a third less time.";
 }
 
+/* ── 3 steps without TaoMate ──────────────────────────────────────────────── */
+
+/** The row a 3-step render needs: the 182 MB file new installs are offered. */
+export const TAOMATE_ROW = "videoH3Turbo3Small";
+/** The one sentence for a 3-step render with no TaoMate file on disk. */
+export const taomateNeeded = (steps) => `${steps} steps needs the TaoMate 3-step LoRA (182 MB), which is not `
+  + "downloaded. Download it, or pick 4 or more steps.";
+
 /* ── references on an engine that takes none ─────────────────────────────── */
 
 const WHY_NO_REFS = {
@@ -292,6 +300,16 @@ export function videoPlan(b = {}, { engineKey, eng = {}, h3 = null, framed = fal
         + `build that loads is ${aN(m.made)} ${m.made}-step file, and it runs at its own step count.` });
       steps = m.steps;
     }
+  }
+
+  /* 3 steps or fewer is TaoMate's slot. Without the file there, the slot
+   * falls back to a 4-step name that may not be on disk either, and a 4-step
+   * build at 3 steps is a different model used wrongly. Refused, with the
+   * download offered (needsModel opens the model window on that row). The
+   * reference path is not the slot's: it runs its own build's count above. */
+  if (engineKey === "h3" && !(pictures || audios) && eng.turboBuilds && !eng.turboBuilds.three
+      && steps <= (eng.turbo3MaxSteps ?? 3)) {
+    return { refusal: { error: taomateNeeded(steps), reason: "taomate-missing", needsModel: TAOMATE_ROW }, warnings, notes };
   }
 
   /* Sparse attention: the saved setting, or the request's own when it names
