@@ -462,7 +462,7 @@ test("§6 the page holds no opinion: no threshold, no size, no prose in web/vidf
   assert.match(app, /\$\("vidQualityNote"\)\.textContent = eng\.fastNote \|\| "";/);
   assert.doesNotMatch(strip(app), /as sharp as the 8-step build/, "no second copy of the note in the page's code");
   /* Render: asks first where H3 is not offered, and names sparse only when it differs from the saved one. */
-  assert.match(app, /if \(typeof globalThis\.aiplayVidAsk === "function" && !\(await globalThis\.aiplayVidAsk\(appConfirm\)\)\) return;\n[\s\S]{0,900}?const \[width, height\] = vidWH\(\);\n\s+\$\("vidCreate"\)\.disabled = true;/,
+  assert.match(app, /if \(typeof globalThis\.aiplayVidAsk === "function" && !\(await globalThis\.aiplayVidAsk\(appConfirm\)\)\) return;\n[\s\S]{0,1600}?const \[width, height\] = vidWH\(\);\n\s+\$\("vidCreate"\)\.disabled = true;/,
     "asked before anything is sent");
   assert.match(app, /sparse: typeof globalThis\.aiplayVidSparse === "function" \? globalThis\.aiplayVidSparse\(\) : undefined,/);
   assert.doesNotMatch(app, /sparse: state\.video\?\.engine === "h3" && \$\("vidSparse"\)/, "the page's default is not sent as a request");

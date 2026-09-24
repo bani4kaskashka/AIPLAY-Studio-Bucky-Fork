@@ -7646,6 +7646,30 @@ function vidQualitySteps(eng) {
   return { fast: Number(d.fast) || standard, standard, best: Number(d.best) || 20 };
 }
 
+/* H3'S SPEED-UPS ARE OPTIONAL ADD-ONS (models.js, addonFor "video"): 3 steps
+ * is TaoMate, 4 steps the 4-step file, 6 to 12 the 8-step file, and 13 and up
+ * the bare model, which needs none. The server refuses a step count whose
+ * file is missing and offers its download (video-plain.js speedupNeeded);
+ * this is the same rule, so the page can offer it first. Null when nothing
+ * is missing, else { build, row }. */
+const VID_SPEEDUP_ROWS = { 3: "videoH3Turbo3Small", 4: "videoH3Turbo4", 8: "videoH3Turbo8" };
+function vidSpeedupNeed(eng, steps, hasRefs) {
+  const tb = eng?.turboBuilds;
+  const n = Number(steps);
+  if (!tb || eng.fixedSteps || !Number.isFinite(n) || n > (eng.turboMaxSteps ?? 12)) return null;
+  const build = hasRefs ? (tb.four || tb.eight ? null : 8)
+    : n <= (eng.turbo3MaxSteps ?? 3) ? (tb.three ? null : 3)
+    : n <= (eng.turbo4MaxSteps ?? 5) ? (tb.four ? null : 4)
+    : (tb.eight ? null : 8);
+  return build ? { build, row: VID_SPEEDUP_ROWS[build] } : null;
+}
+/** The words for a missing speed-up, and the model window on its row. */
+const vidSpeedupWords = (b) => b === 3 ? "TaoMate (182 MB)" : "the " + b + "-step speed-up (1.96 GB)";
+function vidOfferSpeedup(build) {
+  offerModel({ needsModel: VID_SPEEDUP_ROWS[build],
+    error: (build === 3 ? "TaoMate isn't" : "The " + build + "-step speed-up isn't") + " installed. It is optional." });
+}
+
 function vidPaint() {
   const on = !!state.video?.enabled;
   const engines = state.video?.engines || {};
@@ -7746,23 +7770,36 @@ function vidPaint() {
     qRow.hidden = noSteps;
     const qs = vidQualitySteps(eng);
     const stNow = +$("vidSteps").value;
+    /* Optional speed-ups: Fast is TaoMate's 3 steps and Standard the 8-step
+     * file (the 4-step one where only it is on disk). A chip whose file is
+     * missing stays in place, dimmed, and a press offers the download
+     * (data-get) instead of choosing it. Best needs nothing. */
+    const tb = eng.turboBuilds;
+    if (tb) {
+      qs.fast = 3;
+      qs.standard = tb.eight ? 8 : tb.four ? 4 : 8;
+    }
+    const getFor = { fast: tb && !tb.three ? 3 : null, standard: tb && !tb.eight && !tb.four ? 8 : null, best: null };
     for (const b of qRow.querySelectorAll("[data-vq]")) {
       const want = qs[b.dataset.vq];
-      b.setAttribute("aria-pressed", stNow === want ? "true" : "false");
+      const get = getFor[b.dataset.vq];
+      b.classList.toggle("off", !!get);
+      if (get) b.dataset.get = String(get); else delete b.dataset.get;
+      b.setAttribute("aria-pressed", !get && stNow === want ? "true" : "false");
       const small = b.querySelector("small");
       if (small) small.textContent = want + " steps";
     }
     const build = (n) => n === 3 ? "The TaoMate 3-step build" : "The " + n + "-step turbo build";
     /* On the 3-step build the chip's title is the server's note, which says
      * what the saved sparse attention does to it (fastNote, video-plain.js). */
-    $("vidQFast").title = (qs.fast === 3 && eng.fastNote) || build(qs.fast);
-    qRow.querySelector('[data-vq="standard"]').title = build(qs.standard)
-      + (qs.standard === 8 ? "" : ": the 8-step files are not on this disk");
-    /* Where Fast would be the same number as Standard (no TaoMate build, and
-     * no 4-step build under an 8-step Standard) it is two chips doing one
-     * thing, lit together. Fast shows only when it is really faster; the "!"
-     * says how to get it. */
-    $("vidQFast").hidden = qs.fast === qs.standard;
+    const getTitle = (g) => "Needs " + vidSpeedupWords(g) + ", an optional add-on. Click to get it.";
+    $("vidQFast").title = getFor.fast ? getTitle(3) : (qs.fast === 3 && eng.fastNote) || build(qs.fast);
+    qRow.querySelector('[data-vq="standard"]').title = getFor.standard ? getTitle(8) : build(qs.standard)
+      + (qs.standard === 8 ? "" : ": the 8-step file is not on this disk");
+    /* Where Fast would be the same number as Standard it is two chips doing
+     * one thing, lit together. With the speed-ups known (turboBuilds) Fast is
+     * always TaoMate's 3, dimmed when it is missing, so it always shows. */
+    $("vidQFast").hidden = !tb && qs.fast === qs.standard;
     /* The server's words (video-plain.js fastNote): they follow the disk and
      * the saved sparse attention, which makes Fast slightly softer, so this
      * line can no longer promise "as sharp as the 8-step build" while it runs. */
@@ -7874,8 +7911,12 @@ function vidPaint() {
     : alignedFrames(+$("vidSecs").value);
   const mpxf = (w * h * frames) / 1e6;
   const stepScale = cur === "ltx" ? 1 : (eng.fixedSteps || +$("vidSteps").value) / 8;
-  const secs = Math.round((eng.costFixedSeconds ?? 15)
-    + (eng.costRate ?? 0.84) * Math.pow(mpxf, eng.costExponent ?? 1.2) * stepScale);
+  /* The curve is the lab's NVIDIA card; once this PC has rendered clips,
+   * its own measured factor scales it (server/video-speed.js). */
+  const curveSecs = (eng.costFixedSeconds ?? 15)
+    + (eng.costRate ?? 0.84) * Math.pow(mpxf, eng.costExponent ?? 1.2) * stepScale;
+  const measured = Number(eng.speedFactor) > 0;
+  const secs = Math.round(curveSecs * (measured ? Number(eng.speedFactor) : 1));
 
   /* ⚠ Below the trained range the model falls apart, and that is not obvious
    * from a slider. 124 frames is the documented floor; under it you get the
@@ -7929,14 +7970,13 @@ function vidPaint() {
     : " · full-model path";
   const mismatch = !fixedPath && midFile !== null && midFile < 8 && st > midFile && st > t4 && st <= t8;
   const betweenBuilds = !fixedPath && midFile === 8 && st > t4 && st < 8;
-  /* 3 steps is TaoMate's, and TaoMate is optional: without it the server
-   * refuses the render and offers the download (video-plain.js). Said here
-   * first, while the slider sits there. */
-  const noTaoMate = !fixedPath && !hasRefs && !!eng.turboBuilds && !eng.turboBuilds.three
-    && st <= (eng.turbo3MaxSteps ?? 3);
+  /* A step count whose optional speed-up is missing: the server refuses the
+   * render and offers the download (video-plain.js). Said here first, while
+   * the slider sits there, and Make clip offers it before sending. */
+  const needSpeedup = fixedPath ? null : vidSpeedupNeed(eng, st, hasRefs);
 
   $("vidEst").textContent = on
-    ? "about " + fmt(secs) + " once the engine is idle · " + frames + " frames at " + fps + " fps"
+    ? "about " + fmt(secs) + (measured ? " on this PC" : "") + " once the engine is idle · " + frames + " frames at " + fps + " fps"
       + (short ? " · ⚠ under the model's trained range (124+)" : "")
       + (small && !short ? " · ⚠ below native size, expect softer detail" : "")
       // Only 6-7 is genuinely orphaned: at or below t4 the 4-step build loads,
@@ -7944,9 +7984,10 @@ function vidPaint() {
       + (mismatch ? " · ⚠ no " + (hasRefs ? "reference " : "") + "build for " + st + " steps on this disk: use "
           + fourFile + " (the " + fourFile + "-step build) or 13+ (the bare model)" : "")
       + (betweenBuilds ? " · ⚠ between the " + fourFile + "-step and 8-step builds: use " + fourFile + " or 8" : "")
-      + (noTaoMate ? " · ⚠ " + st + " steps needs TaoMate (182 MB): download it, or use 4 or more" : "")
-      // No path to name: without TaoMate, 3 steps does not render.
-      + (noTaoMate ? "" : stepPath)
+      + (needSpeedup ? " · ⚠ " + st + " steps needs " + vidSpeedupWords(needSpeedup.build)
+          + ": download it, or pick another step count" : "")
+      // No path to name: without its speed-up, this step count does not render.
+      + (needSpeedup ? "" : stepPath)
       // Reference tokens are attended on every step, so they cost time. One
       // measured point: one picture at 864x480x124 added ~10% — more and
       // larger references cost more.
@@ -7967,6 +8008,8 @@ if ($("vidAttn")) {
 }
 for (const b of document.querySelectorAll("#vidQualityRow [data-vq]")) {
   b.onclick = () => {
+    /* A dimmed chip is an optional speed-up that is not on disk: offer it. */
+    if (b.dataset.get) { vidOfferSpeedup(Number(b.dataset.get)); return; }
     const eng = (state.video?.engines || {})[$("vidEngine").value || state.video?.engine || "h3"] || {};
     // The same numbers the chips are lit and labelled by: the server's.
     const steps = vidQualitySteps(eng)[b.dataset.vq];
@@ -8771,6 +8814,14 @@ $("vidCreate").onclick = async () => {
   /* On a card H3 is not offered on, the server's sentence first, as a
    * question (web/vidfit.js): never a silent render, never a silent stop. */
   if (typeof globalThis.aiplayVidAsk === "function" && !(await globalThis.aiplayVidAsk(appConfirm))) return;
+  /* A step count whose optional speed-up is missing: offer its download now
+   * rather than send a render the server would refuse. */
+  {
+    const eng = (state.video?.engines || {})[$("vidEngine").value || state.video?.engine] || {};
+    const hasRefs = ((state.refImages || []).length + (state.refAudios || []).length) > 0;
+    const need = eng.fixedSteps ? null : vidSpeedupNeed(eng, +$("vidSteps").value, hasRefs);
+    if (need) { vidOfferSpeedup(need.build); return; }
+  }
   /* ⚠ THROUGH vidWH(), never by re-parsing the select. This line used to be
    * `$("vidSize").value.split("x").map(Number)`, which on the custom option
    * splits the literal string "custom" and yields [NaN] — so a custom size
@@ -16444,6 +16495,7 @@ function imgQwenShape() {
   $("imgAdvToggle").parentElement.hidden = !advanced;
   $("imgAdvToggle").parentElement.previousElementSibling.hidden = !advanced;
   if (!advanced) $("imgAdv").hidden = true;
+  imgDraftPaint();                               // Fast draft follows the same choices
   imgQueueGate();
 }
 /* ⚠ `refs` IS A BUCKET, NOT A COUNT, and that is what stops this screen from
@@ -16459,6 +16511,8 @@ function imgQwenShape() {
 function imgQwenQuery() {
   const refs = imgRefs.length || ($("imgPersona").value ? 1 : 0);
   const query = new URLSearchParams({ refs: refs ? "1" : "0", transparent: String($("imgTransparent").checked) });
+  /* A draft is checked as a draft: its LoRA and nodes join `ready`. */
+  if (typeof imgDraftOn === "function" && imgDraftOn()) query.set("draft", "true");
   if ($("imgEngine").value === "checkpoint") {
     const pick = imgCkptShelf.find((c) => c.name === $("imgCkpt").value);
     if (pick?.dit) query.set("dit", pick.dit);
@@ -16501,6 +16555,7 @@ async function imgQwenCheck() {
     if (request !== imgQwenRequest) return false;
     imgQwenStatus = status;
     imgQwenStatusKey = key;
+    imgDraftPaint();                             // every answer carries Fast draft's own
     /* Ready is a green chip and nothing else. Otherwise the chip names the
      * problem and the note says what to do about it. */
     const parts = [];
@@ -16602,6 +16657,153 @@ $("imgQwenModels").onclick = () => setView("models");
 $("imgRefSizing").onchange = imgQwenShape;
 $("imgTransparent").onchange = imgQwenCheck;
 for (const id of ["imgEncoder", "imgVae"]) $(id).addEventListener("change", imgQwenCheck);
+
+/* ── FAST DRAFT (Qwen Image 2.1) ───────────────────────────────────────────
+ * Viggle's turbo LoRA on the same model: 5 steps on its own schedule instead of
+ * 25, measured about 3x quicker, and worse at small text and at extra faces or
+ * fingers — so a draft for boards and ideas, never the default. One plain chip
+ * (#imgDraft, in .ctawrap so Simple keeps it and its assistant can tick it),
+ * shown only on Qwen Image 2.1 and only when its LoRA is on disk; otherwise
+ * "Get Fast draft (0.68 GB)" opens that Models row. The chip's own words carry
+ * the trade ("about 3× quicker · may garble small text"), so no one has to
+ * hover to learn it. A base-only choice greys it with the reason and the
+ * render goes out as a full one. While it is on, the steps and CFG sliders show
+ * its numbers, locked, and give back what they held when it goes off.
+ *
+ * The greyed CASES and the numbers mirror the server's QWEN_DRAFT (qwen-image.js),
+ * which refuses the same cases with its own sentences; server/qwen-draft_test.js
+ * diffs the two, because the browser cannot import a server module. */
+function imgDraftSpec() {
+  return {
+    steps: 5, cfg: 1, maxRefs: 3, maxTokens: 8192, capability: "imageQwenFastDraft",
+    tip: "About 3× quicker in a run of drafts (a new prompt is about 2×); may garble small text and add extra faces or fingers. "
+      + "For drafts, boards and ideas; not for finals, lettering or two-reference style edits.",
+    reasons: {
+      transparent: "Fast draft is off: a transparent picture needs the full render.",
+      refs: "Fast draft is off: it takes up to 3 reference pictures, a character's included.",
+      cfg: "Fast draft is off: CFG above 1 needs the full render.",
+      negative: "Fast draft is off: a negative prompt needs the full render.",
+      size: "Fast draft is off: it was measured up to about 2 MP (1920 × 1088); a larger picture needs the full render.",
+    },
+    /* Not a refusal: a ticked draft with two or more references still runs. */
+    twoRefs: "Two references: Fast draft measured only about 2× quicker here, and blind judges preferred the full render for a two-reference style edit. Use the full render for the final.",
+  };
+}
+var imgDraftHeld = null;          // { steps, cfg } the sliders held before the chip locked them
+var imgPersonaRefCount = {};      // character name -> how many reference pictures it brings
+var imgDraftWatch = null;         // the poll that waits for a Fast draft download
+/** Reference pictures this render carries: the page's own and a character's. */
+function imgDraftRefCount() {
+  return imgRefs.length + ((imgPersonaRefCount || {})[$("imgPersona")?.value] || 0);   // var: may run before its line at boot
+}
+/** Latent tokens of the canvas a draft would sample, as the server sizes it:
+ *  the page sends refResolution 1024, so a reference-sized edit is 1024². */
+function imgDraftTokens() {
+  const hasRefs = imgRefs.length > 0 || !!$("imgPersona")?.value;
+  if (hasRefs && $("imgRefSizing")?.value === "reference") return 64 * 64;
+  const custom = $("imgSize")?.value === "custom";
+  const [w, h] = custom ? [Number($("imgW")?.value) || 1024, Number($("imgH")?.value) || 1024]
+    : String($("imgSize")?.value || "1024x1024").split("x").map(Number);
+  const side = (v) => Math.ceil(Math.min(4096, Math.max(256, Math.round(v || 1024))) / 32) * 32;
+  return Math.round(side(h) / 16) * Math.round(side(w) / 16);
+}
+/** Why Fast draft cannot go with this render right now, or "". */
+function imgDraftBlocked() {
+  const spec = imgDraftSpec(), R = spec.reasons;
+  /* The LoRA is on disk but this ComfyUI lacks a node the draft graph needs:
+   * said here, on the chip, rather than as a red Qwen light after ticking it. */
+  const missing = imgQwenStatus?.draft?.missingNodes || [];
+  if (missing.length) return `Fast draft needs a newer ComfyUI (missing ${missing.join(", ")}). Update ComfyUI, restart, then check again.`;
+  if ($("imgTransparent")?.checked) return R.transparent;
+  if (imgDraftRefCount() > spec.maxRefs) return R.refs;
+  if (Number($("imgCfg")?.value) > spec.cfg) return R.cfg;
+  if (String($("imgNeg")?.value || "").trim()) return R.negative;
+  if (imgDraftTokens() > spec.maxTokens) return R.size;
+  return "";
+}
+/** Fast draft goes with this render: ticked, offered, and not greyed. */
+function imgDraftOn() {
+  const box = $("imgDraft");
+  return !!box && box.checked && !box.disabled && !$("imgDraftRow").hidden && !$("imgDraftChip").hidden
+    && imgEffectiveEngine() === "qwen-image-2.1";
+}
+function imgDraftLock(on, qwen) {
+  const steps = $("imgSteps"), cfg = $("imgCfg"), spec = imgDraftSpec();
+  if (on) {
+    if (!imgDraftHeld) imgDraftHeld = { steps: steps.value, cfg: cfg.value };
+    steps.value = spec.steps; $("imgStepsV").textContent = String(spec.steps);
+    cfg.value = spec.cfg; $("imgCfgV").textContent = String(spec.cfg);
+    steps.disabled = cfg.disabled = true;
+    steps.title = cfg.title = "Fast draft always renders 5 steps at CFG 1. Turn it off to set these.";
+    /* The reason the Simple assistant reads for a locked field (assist.js). */
+    steps.dataset.why = cfg.dataset.why = "Fast draft is on: it always renders 5 steps at CFG 1. Turn Fast draft off to set these.";
+  } else if (imgDraftHeld) {
+    /* Given back only on Qwen (another engine has just set its own defaults),
+     * and only where the lock's own number is still there: a value written
+     * since (the assistant setting CFG 3, which is what greyed the chip) is
+     * kept, not reverted under a message that names it. */
+    if (qwen) {
+      if (Number(steps.value) === spec.steps) { steps.value = imgDraftHeld.steps; $("imgStepsV").textContent = steps.value; }
+      if (Number(cfg.value) === spec.cfg) { cfg.value = imgDraftHeld.cfg; $("imgCfgV").textContent = cfg.value; }
+    }
+    steps.disabled = cfg.disabled = false;
+    steps.title = cfg.title = "";
+    delete steps.dataset.why; delete cfg.dataset.why;
+    imgDraftHeld = null;
+  }
+}
+function imgDraftPaint() {
+  const row = $("imgDraftRow");
+  if (!row) return;
+  const qwen = imgEffectiveEngine() === "qwen-image-2.1";
+  /* The server's own answer, carried by every Qwen readiness check. Until the
+   * first one arrives nothing is promised either way. */
+  const st = imgQwenStatus?.draft || null;
+  const have = !!st?.fileReady;
+  row.hidden = !qwen || !st;
+  $("imgDraftChip").hidden = !have;
+  $("imgDraftGet").hidden = have || !st;
+  if (st && !have) $("imgDraftGet").textContent = `Get Fast draft (${((st.bytes || 679604800) / 1e9).toFixed(2)} GB)`;
+  const why = qwen && have ? imgDraftBlocked() : "";
+  const box = $("imgDraft");
+  box.disabled = !!why;
+  /* What the Simple assistant is told for a greyed chip (assist.js readFields). */
+  if (why) box.dataset.why = why; else delete box.dataset.why;
+  $("imgDraftChip").classList.toggle("off", !!why);
+  $("imgDraftChip").title = why || imgDraftSpec().tip;
+  const on = imgDraftOn();
+  /* One line under the chip. A greyed chip's reason: always once it was
+   * ticked, and in Simple (no hover there) even unticked, via .quiet in
+   * ui.css. A ticked draft with two or more references: the caution. */
+  const note = why || (on && imgDraftRefCount() >= 2 ? imgDraftSpec().twoRefs : "");
+  const whyEl = $("imgDraftWhy");
+  whyEl.hidden = !note;
+  whyEl.textContent = note;
+  whyEl.classList.toggle("quiet", !!why && !box.checked);
+  /* The number behind the chip, whenever it is offered (Advanced only: CSS
+   * hides it under .assist-on). */
+  $("imgDraftNums").hidden = !(qwen && have);
+  imgDraftLock(on, qwen);
+}
+$("imgDraft").onchange = () => { imgDraftPaint(); imgQwenCheck(); };
+/* The size decides whether a draft is inside its measured ~2 MP. */
+$("imgSize").addEventListener("change", () => imgDraftPaint());
+for (const id of ["imgW", "imgH"]) $(id).addEventListener("input", () => imgDraftPaint());
+$("imgDraftGet").onclick = () => {
+  const st = imgQwenStatus?.draft || {};
+  offerModel({ needsModel: st.capability || imgDraftSpec().capability, error: "Fast draft isn't installed yet." });
+  /* Look again while it downloads, so the chip appears on its own. */
+  clearInterval(imgDraftWatch);
+  let tries = 0;
+  imgDraftWatch = setInterval(async () => {
+    if (++tries > 240) { clearInterval(imgDraftWatch); return; }       // 20 minutes
+    try {
+      const d = await (await fetch("/api/models")).json();
+      const row = (d.capabilities || []).find((c) => c.id === (st.capability || imgDraftSpec().capability));
+      if (row?.ready) { clearInterval(imgDraftWatch); imgQwenCheck(); }
+    } catch { /* Studio restarting: try again next tick */ }
+  }, 5000);
+};
 
 function imgRefsPaint() {
   const eng = imgEffectiveEngine();
@@ -17219,6 +17421,8 @@ async function imgLoadPersonas() {
     const d = await (await fetch(`/api/personas?for=${encodeURIComponent(eng)}`)).json();
     rows = d.personas || []; fits = d.fits || null;
   } catch { /* leave the picker empty */ }
+  /* Their pictures count toward Fast draft's three references. */
+  imgPersonaRefCount = Object.fromEntries(rows.map((x) => [x.name, (x.refImages || []).length]));
   const cur = $("imgPersona").value;
   $("imgPersona").innerHTML = '<option value="">Character…</option>'
     + rows.map((x) => `<option value="${esc(x.name)}"${x.name === cur ? " selected" : ""}>${esc(x.name)}</option>`).join("");
@@ -17478,6 +17682,9 @@ $("imgGo").onclick = async () => {
         ...(effective === "qwen-image-2.1" ? {
           refSizing: $("imgRefSizing").value, refResolution: 1024, transparent: $("imgTransparent").checked,
           cfg: Number($("imgCfg").value) || 1, negative: $("imgNeg").value.trim(), sampler: "euler", scheduler: "simple",
+          /* Fast draft: only when the chip is ticked, offered and not greyed;
+           * the steps slider already reads its 5. */
+          ...(imgDraftOn() ? { draft: true } : {}),
         } : {}),
         /* Anima samples with whatever pair is chosen (er_sde / simple unless changed). */
         ...($("imgEngine").value === "anima" && $("imgSampler").value ? { sampler: $("imgSampler").value, scheduler: $("imgSched").value } : {}),
@@ -19069,6 +19276,15 @@ function ovMediaCost(idea, kind) {
   if (kind === "image") {
     if ((idea.effectiveEngine || idea.engine || "qwen-image-2.1") === "qwen-image-2.1") {
       const refs = (idea.refImages?.length || 0) + (idea.persona ? 1 : 0);
+      if (idea.draft === true) {
+        /* FAST DRAFT, MEASURED (2026-09-24, the numbers in server/art.js
+         * QWEN_DRAFT_SECONDS, which qwen-draft_test.js diffs against these):
+         * 3.1 s a megapixel of batch, 3 s a reference, and 9 s for the text
+         * encode of a new prompt. A night goes round the ideas, so every take
+         * is costed as a new prompt: ~12 s at 1024², not the 3 s of a repeat. */
+        const draftMp = Math.max((idea.width || 1024) * (idea.height || 1024), refs ? (idea.refResolution || 1024) ** 2 : 0) / 1048576;
+        return 3.1 * draftMp * (idea.count || 1) + refs * 3 + 9;
+      }
       const pixels = Math.max(mp, refs ? (idea.refResolution || 2048) ** 2 / 1048576 : 0);
       // Unmeasured planning allowance, matching the backend's provisional model.
       return 120 + 2 * (idea.steps || 25) * (idea.count || 1) * pixels * (idea.cfg > 1 ? 2 : 1) + refs * 45;
@@ -19137,7 +19353,9 @@ function ovPaintPlan(total) {
       <div><span>total</span><b>${dur(secs)} · done by ${clock(Date.now() + secs * 1000)}</b></div>`;
     $("ovEst").textContent =
       `${total} ${ov.kind === "image" ? "picture" : "clip"}${total > 1 ? "s" : ""} · about ${dur(secs)} · done by ${clock(Date.now() + secs * 1000)}`
-      + (ov.kind === "image" && ov.ideas.some((it) => (it.effectiveEngine || it.engine || "qwen-image-2.1") === "qwen-image-2.1")
+      /* Fast draft ideas are costed from measurements; only a full Qwen render
+       * still carries the unmeasured allowance. */
+      + (ov.kind === "image" && ov.ideas.some((it) => (it.effectiveEngine || it.engine || "qwen-image-2.1") === "qwen-image-2.1" && it.draft !== true)
         ? " · Qwen time is an unmeasured planning estimate." : "");
     $("ovStart").disabled = !ov.ideas.length || tight;
     return;
@@ -19286,6 +19504,8 @@ function ovImageIdea(prompt) {
     ...(effective === "qwen-image-2.1" ? {
       refSizing: $("imgRefSizing").value, refResolution: 1024, transparent: $("imgTransparent").checked,
       cfg: Number($("imgCfg").value) || 1, negative: $("imgNeg").value.trim(), sampler: "euler", scheduler: "simple",
+      /* Every take of this idea a Fast draft, when the chip is on. */
+      ...(typeof imgDraftOn === "function" && imgDraftOn() ? { draft: true } : {}),
     } : {}),
     ...(engine === "zimage-base" ? { negative: $("imgNeg").value.trim(), cfg: Number($("imgCfg").value) || 4 } : {}),
   };

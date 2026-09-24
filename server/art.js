@@ -27,13 +27,14 @@ import { stripPngText } from "./pngtext.js";
 import zlib from "node:zlib";
 import path from "node:path";
 import { config } from "./config.js";
-import { qwenImageGraph, QWEN_IMAGE_PRESET } from "./qwen-image.js";
+import { qwenImageGraph, qwenImageSettings, QWEN_IMAGE_PRESET } from "./qwen-image.js";
 import { qwenImageStatus } from "./qwen-status.js";
 import { resolvePick } from "./modelpick.js";
 import { animaGraph, coverGraph, coverPrompt, COVER_NODES, ideogramGraph, ideogramPassSeeds, nextIdeogramSeed, isRefusalCard, ideogramRefusalMessage, checkpointGraph, zImageGraph, krea2Graph, videoGraph, videoPrompt, alignFrames, videoEngine, enhanceGraph, restyleGraph, h3SparseFor } from "./workflow.js";
 /* An engine failure as a sentence, the raw text behind Details (the Video screen's). */
 import { plainVideoFailure } from "./video-plain.js";
 import { chosenAttention, vendorOf } from "./comfyargs.js";
+import { createVideoSpeed } from "./video-speed.js";
 import { joinClips } from "./clipjoin.js";
 import { runLrc, LRC_SCRIPT, stderrTail } from "./lrc.js";
 import { buildCustom, assignedTo } from "./customWorkflows.js";
@@ -203,10 +204,25 @@ export function attentionOptions(info) {
  * The old 4x limit gave up at 1497 s, two minutes before the clip landed, and
  * the finished file was never filed.
  */
-export function clipBudgetMs(expectedSeconds, vendor) {
+export function clipBudgetMs(expectedSeconds, vendor, factor = null) {
   const slow = vendor === "nvidia" ? 1 : 3;
-  return Math.max(900_000, (expectedSeconds * 4 * slow + 300) * 1000);
+  const base = Math.max(900_000, (expectedSeconds * 4 * slow + 300) * 1000);
+  /* Once this PC has rendered clips, its own measured factor (video-speed.js)
+   * counts too: whichever allows more. */
+  return Number(factor) > 0 ? Math.max(base, Math.round((expectedSeconds * factor * 4 + 300) * 1000)) : base;
 }
+
+/** Whether an H3-family clip starts on a clean card (config.js
+ *  video.freeBeforeClip, measured there): "auto" on any card but NVIDIA. */
+export function clipNeedsCleanCard(engine, { mode = "auto", vendor = null } = {}) {
+  if (engine !== "h3" && engine !== "fasth3") return false;
+  if (mode === "always") return true;
+  if (mode === "never") return false;
+  return vendor !== "nvidia";
+}
+
+/** This PC's measured clip speed, per engine (server/video-speed.js). */
+export const videoSpeed = createVideoSpeed({ dir: config.paths?.appData });
 
 /**
  * The methods BlockSparseAttention offers, from an /object_info answer, or
@@ -385,13 +401,50 @@ const IMAGE_DEFAULT_STEPS = { flux2: 4, zimage: 8, "zimage-base": 25, checkpoint
  * it is about to do. Same class of bug as costing a 2048² job as 1024²: the
  * number that reaches the deadline has to be the number the GRAPH uses. */
 const IDEOGRAM_PRESET_STEPS = { quality: 48, turbo: 12, default: 20 };
-/** Seconds one image job should honestly take on a quiet machine. */
-export function imageCostSeconds({ engine = "flux2", steps, count = 1, width, height, quality, cfg = 1, refImages = [], refResolution = 1024 } = {}) {
+/* FAST DRAFT'S CLOCK, measured on the 16 GB lab card on 2026-09-24 (the A/B
+ * in lab/qwen_turbo and its switch-cost follow-up), not guessed:
+ *   warm, the same prompt again     2.9 s at 1024² (3.1 s A/B median), and
+ *                                   about 3.1 s per megapixel of batch: 12.1 s
+ *                                   for 4 x 1344x768, 6.7 s at 1920x1088
+ *   anything else with Qwen loaded  ~12 s: a new prompt pays the text encode
+ *                                   (12.2 s), and a draft after a final
+ *                                   re-patches the model (11.7 s, +8.8 s)
+ *   Qwen not loaded                 36.7 s (the cold run)
+ * and a FINAL straight after drafts pays the re-patch the other way, +2.5 s.
+ * The two cannot stay loaded together with the stock loader: every switch
+ * re-streams 6.9 GB and re-merges the LoRA. Grouping drafts keeps them fast.
+ * Here these only size the queue's deadline (floored at 30 min for Qwen); the
+ * number a person sees is Overnight's plan, web/app.js ovMediaCost, which
+ * costs a draft take as a new prompt from the same figures
+ * (server/qwen-draft_test.js holds the two together). */
+export const QWEN_DRAFT_SECONDS = Object.freeze({
+  perMegapixel: 3.1, notWarm: 9, cold: 34, perReference: 3, finalAfterDrafts: 2.5,
+});
+
+/** The render context the draft clock depends on, as ArtRunner remembers it:
+ *  what the previous Qwen render was, keyed on what its text-encode cache
+ *  keys on (the words, the references and the encoder). */
+export function qwenRenderKey({ prompt = "", negative = "", refImages = [], refResolution = 1024, encoder = null } = {}) {
+  return createHash("sha1").update(JSON.stringify([prompt, negative || "", refImages || [], refResolution ?? 1024, encoder || null])).digest("hex").slice(0, 16);
+}
+
+/** Seconds one image job should honestly take on a quiet machine.
+ *  `previous` is the last Qwen render ({ draft, key }) or null when Qwen is
+ *  not known to be loaded; only the Qwen engine reads it. */
+export function imageCostSeconds({ engine = "flux2", steps, count = 1, width, height, quality, cfg = 1, refImages = [], refResolution = 1024, draft = false, key = null } = {}, { previous = null } = {}) {
+  if (engine === "qwen-image-2.1" && draft === true) {
+    const mp = Math.max((width || 1024) * (height || 1024), refImages.length ? (refResolution || 1024) ** 2 : 0) / 1048576;
+    const S = QWEN_DRAFT_SECONDS;
+    const warmSame = previous?.draft === true && key != null && previous.key === key;
+    return S.perMegapixel * mp * Math.max(1, count) + refImages.length * S.perReference
+      + (warmSame ? 0 : previous ? S.notWarm : S.cold);
+  }
   if (engine === "qwen-image-2.1") {
     // A provisional scheduling estimate, not a measured performance claim.
     // References add vision/latent processing, and cfg > 1 adds a second pass.
     const mp = Math.max((width || 1024) * (height || 1024), refImages.length ? (refResolution || 2048) ** 2 : 0) / 1048576;
-    return 120 + 2 * (steps || QWEN_IMAGE_PRESET.steps) * Math.max(1, count) * mp * (cfg > 1 ? 2 : 1) + refImages.length * 45;
+    return 120 + 2 * (steps || QWEN_IMAGE_PRESET.steps) * Math.max(1, count) * mp * (cfg > 1 ? 2 : 1) + refImages.length * 45
+      + (previous?.draft === true ? QWEN_DRAFT_SECONDS.finalAfterDrafts : 0);
   }
   const n = engine === "ideogram4"
     ? (IDEOGRAM_PRESET_STEPS[quality] ?? IDEOGRAM_PRESET_STEPS.default)
@@ -415,9 +468,9 @@ export function imageCostSeconds({ engine = "flux2", steps, count = 1, width, he
   const LOAD = { flux2: 30, zimage: 30, "zimage-base": 30, checkpoint: 45, ideogram4: 180 }[engine] ?? 45;
   return LOAD + PER_PASS_MP * n * slots * cfgPasses * mp;
 }
-export function imageDeadlineMs(job = {}) {
-  if (job.engine === "qwen-image-2.1") return Math.max(1_800_000, (imageCostSeconds(job) * 6 + 120) * 1000);
-  return Math.max(180_000, (imageCostSeconds(job) * 6 + 120) * 1000);
+export function imageDeadlineMs(job = {}, context = {}) {
+  if (job.engine === "qwen-image-2.1") return Math.max(1_800_000, (imageCostSeconds(job, context) * 6 + 120) * 1000);
+  return Math.max(180_000, (imageCostSeconds(job, context) * 6 + 120) * 1000);
 }
 
 /**
@@ -608,10 +661,20 @@ export class ArtRunner extends EventEmitter {
        * launch flag), so what it offers is asked again, not remembered. */
       this.#ckOffered = undefined;
       this.#sparseOffered = undefined;
+      this.#lastQwen = null;
     });
   }
 
   #ws;
+
+  /* THE LAST QWEN RENDER, { draft, key }, or null when Qwen is not known to be
+   * loaded (nothing yet, a music model came back, another engine or a clip
+   * ran, the engine restarted). Fast draft's estimate reads it: ~3 s only
+   * straight after a draft of the same words, ~12 s otherwise, and a final
+   * after drafts pays +2.5 s (imageCostSeconds, QWEN_DRAFT_SECONDS). */
+  #lastQwen = null;
+  /** For tests and the status reader: what the next Qwen render follows. */
+  get lastQwen() { return this.#lastQwen; }
 
   /* undefined = not asked this boot; true/false = the engine's own answer. */
   #ckOffered;
@@ -1340,11 +1403,15 @@ export class ArtRunner extends EventEmitter {
       if (this.jobs.loaded) {
         console.log(`  [art] unloading ${this.jobs.loaded.key} before the ${job.kind || "image"} job`);
         await this.jobs.unloadModels().catch(() => {});
+        this.#lastQwen = null;             // a music model had the card: Qwen is not warm
       }
       /* A program of its own puts nothing into the engine and reports no
        * progress over its socket: neither the resident flag nor the socket. */
       const ownProgram = SUBPROCESS_KINDS.has(job.kind);
       if (!ownProgram) this.jobs.artResident = true;
+      /* A clip, a separation or anything but a picture uses the card: Qwen is
+       * not known to be warm after it. A picture sets this itself below. */
+      if (job.kind !== "cover") this.#lastQwen = null;
       job.startedAt = this.startedAt;
       if (!ownProgram) this.#connect();
       this.emit("update");
@@ -1483,6 +1550,10 @@ export class ArtRunner extends EventEmitter {
         } else {
           const { covers, thumbs } = await this.#render(job);
           job.covers = covers;
+          /* What the next Qwen render follows: this one, if Qwen painted it;
+           * after any other engine, Qwen is not known to be warm. */
+          this.#lastQwen = job._qwenKey && job._paintedBy === "qwen-image-2.1"
+            ? { draft: job.draft === true, key: job._qwenKey } : null;
           this.done.unshift(job);
           this.emit("cover", { file: job.file, covers, thumbs, seed: job.seed, runId: job.runId ?? null,
                                durationMs: job.startedAt ? Date.now() - job.startedAt : null,
@@ -1515,6 +1586,7 @@ export class ArtRunner extends EventEmitter {
       } catch (err) {
         job.finishedAt = Date.now();
         job.durationMs = job.startedAt ? job.finishedAt - job.startedAt : null;
+        this.#lastQwen = null;               // a failed render leaves the engine's state unknown
         /* A minors refusal is never read as a Stop, even when Stop was pressed
          * at the same moment: it takes the refusal path below, which blanks
          * the job's words before it is listed, logged or announced. */
@@ -1681,6 +1753,9 @@ export class ArtRunner extends EventEmitter {
         refImages: job.refImages, refSizing: job.refSizing, refResolution: job.refResolution,
         transparent: job.transparent, thumbSize: config.art.thumbSize,
         dit: ownDit, encoder: ownEncoder, vae: ownVae,
+        /* Fast draft: the turbo LoRA and its 5-step schedule (qwen-image.js
+         * QWEN_DRAFT). Readiness below then also requires the LoRA on disk. */
+        ...(job.draft === true ? { draft: true } : {}),
       };
       // Automatic song covers bypass /api/image, so they need the same
       // readiness check here. Recheck manual jobs too: a queued request may
@@ -1693,7 +1768,14 @@ export class ArtRunner extends EventEmitter {
         throw new Error(`Qwen Image 2.1 is unavailable: ${readiness.error || "Check its native model files and compatible runtime in Models."}`);
       }
       graph = qwenImageGraph(qwenOptions);
-      job._imageOptions = { steps: graph[8].inputs.steps, cfg: graph[8].inputs.cfg,
+      const sampled = qwenImageSettings(graph);
+      job._qwenKey = qwenRenderKey({ prompt, negative: job.negative, refImages: job.refImages,
+        refResolution: graph[4].inputs.resolution, encoder: graph[2].inputs.clip_name });
+      job._imageOptions = { steps: sampled.steps, cfg: sampled.cfg,
+        /* PROVENANCE: a draft says so on the picture's row, with the LoRA and
+         * its strength, so "what made this" never reads as the full render.
+         * Absent on a final, whose row is unchanged. */
+        ...(sampled.draft ? { draft: true, lora: sampled.lora, loraStrength: sampled.loraStrength, sigmas: sampled.sigmas } : {}),
         refImages: job.refImages || [], refSizing: job.refSizing || "reference",
         refResolution: graph[4].inputs.resolution, transparent: !!job.transparent,
         requestedWidth: job.width, requestedHeight: job.height,
@@ -1831,7 +1913,8 @@ export class ArtRunner extends EventEmitter {
       /* Resolved the SAME way the ideogram branch above resolves it, because
        * that is the preset whose step count the graph will actually run. */
       quality: job.quality || config.art.quality,
-    });
+      draft: job.draft === true, key: job._qwenKey || null,
+    }, { previous: this.#lastQwen });
 
     // Poll history rather than sharing the job runner's websocket. Art progress
     // is not worth showing per-step — it is three seconds — and a second
@@ -2142,7 +2225,23 @@ export class ArtRunner extends EventEmitter {
     const stepScale = engine === "ltx" ? 1 : (job.steps ?? v.steps) / 8;
     const expected = v.costFixedSeconds
       + v.costRate * Math.pow((px * frames) / 1e6, v.costExponent) * stepScale;
-    const budgetMs = clipBudgetMs(expected, vendorOf(config.gpu, config.torchBackend));
+    const budgetMs = clipBudgetMs(expected, vendorOf(config.gpu, config.torchBackend), videoSpeed.factor(engine));
+
+    /* A FRESH ENGINE FIRST (config.js video.freeBeforeClip, measured there):
+     * a second H3 render in the same engine process spilled into shared
+     * memory and ran at half speed, and ComfyUI's /free with unload_models
+     * did not bring it back; a new process did. So an engine that has already
+     * rendered anything is restarted, same flags, before the clip (about 45
+     * s against about 9 minutes lost on an 8-step clip). Nothing is loaded
+     * afterwards: the music model is gone, Qwen is not warm. */
+    if (clipNeedsCleanCard(engine, { mode: config.video.freeBeforeClip, vendor: vendorOf(config.gpu, config.torchBackend) })
+        && engineDoor.ranSinceStart() > 0 && typeof this.comfy?.restart === "function") {
+      console.log(`  [art] restarting the engine before the ${engine} clip (it has rendered ${engineDoor.ranSinceStart()} since it started)`);
+      await this.comfy.restart().catch((e) => console.error(`  [art] engine restart failed: ${e.message}`));
+      this.jobs.loaded = null;
+      this.jobs.artResident = true;
+      this.#lastQwen = null;
+    }
 
     /* AT MOST TWO SUBMISSIONS, and the second one is rare — see the ENOENT arm
      * below for the only thing that reaches it. The deadline is per attempt
@@ -2191,6 +2290,8 @@ export class ArtRunner extends EventEmitter {
       if (done.status !== "completed") {
         throw failed(done.error || `the engine did not finish (${done.status})`);
       }
+      /* This PC's speed: what really rendered, against the curve's estimate. */
+      if (!done.cached) videoSpeed.record(engine, done.runningSec ?? done.elapsedSec, expected);
       // SaveVideo reports under `images` with animated:true, not a `videos` key —
       // the client normalises both into one list, so this no longer has to care.
       const saved = savedClip(done.outputs, graph);

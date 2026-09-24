@@ -91,6 +91,28 @@ in the app.
                             Kingdom, Republic of Korea, United States of
                             America.
 
+    4-step speed-up for H3 (1.96 GB)
+                            MiniMax H3 Community Licence (derived from H3)
+                            Output rights: yours, with conditions (MiniMax H3
+                            Community License Agreement §VI.4 (Intellectual
+                            Property); a derivative of H3)
+                            https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE
+                            ⚠ Grants rights only inside its Applicable
+                            Territory, which EXCLUDES European Union, United
+                            Kingdom, Republic of Korea, United States of
+                            America.
+
+    8-step speed-up for H3 (1.96 GB)
+                            MiniMax H3 Community Licence (derived from H3)
+                            Output rights: yours, with conditions (MiniMax H3
+                            Community License Agreement §VI.4 (Intellectual
+                            Property); a derivative of H3)
+                            https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE
+                            ⚠ Grants rights only inside its Applicable
+                            Territory, which EXCLUDES European Union, United
+                            Kingdom, Republic of Korea, United States of
+                            America.
+
     BUNNY (action logic)    MiniMax H3 Community Licence (derived from H3)
                             Output rights: yours, with conditions (MiniMax H3
                             Community License Agreement §VI.4 (Intellectual
@@ -270,6 +292,17 @@ in the app.
                             Agreement §1(i), with §2(a)-(b) limiting use to
                             noncommercial purposes)
                             https://huggingface.co/Qwen/Qwen-Image-2.1/blob/790c92633540aa0cb11d9abf19eb46d861714758/LICENSE
+
+    Fast draft for Qwen Image 2.1 (Viggle turbo LoRA)
+                            Qwen Research License Agreement
+                            Output rights: NOT FOR SALE — conservative Studio
+                            noncommercial classification; output scope is not
+                            resolved by this label (Qwen Research License
+                            Agreement §1(i), with §2(a)-(b) limiting use to
+                            noncommercial purposes; the LoRA is a derivative of
+                            Qwen-Image-2.1 and its NOTICE ships it under the
+                            same agreement)
+                            https://huggingface.co/Viggle/Qwen-Image-2.1-viggle-turbo/blob/2b85c1fcb7b2584c4133fe0c547ec968ff2ae20e/LICENSE
 
     Krea 2 Turbo (community licence)
                             Krea 2 Community License Agreement

@@ -1324,7 +1324,9 @@ const VIDEO_MODEL_DIRS = {
   videoVae: "vae",
   audioVae: "vae",
   upscaler: "latent_upscale_models",
-  turboLora: "loras",
+  /* No turboLora: every H3 speed-up is optional. Without one H3 renders the
+   * bare model (20 steps), and a step count whose file is missing is refused
+   * with its download offered (video-plain.js videoPlan). */
 };
 
 /**
@@ -1872,7 +1874,16 @@ export function h3SparseFor(eng, { steps, refs = false, sparse, continuation = f
   const want = sparse ?? eng?.sparse ?? "off";
   if (want !== "sol-attn" || !eng?.solAttn || continuation || control) return null;
   const { turbo, use3, lora } = h3TurboLoraFor(eng, { steps, refs });
-  return turbo && use3 && !!lora && lora === eng.turboLora3 ? eng.solAttn : null;
+  /* The strength is the person's (video_settings sparse_tau, 1.0 to 2.0);
+   * unset, the lab's recipe stands. */
+  const tau = Number(eng.solAttnTau);
+  const recipe = Number.isFinite(tau) && tau >= 1 && tau <= 2 && tau !== eng.solAttn.tau
+    ? { ...eng.solAttn, tau } : eng.solAttn;
+  if (turbo && use3 && !!lora && lora === eng.turboLora3) return recipe;
+  /* Every other step count only when the person asked for it (video_settings
+   * sparse_everywhere): the lab measured the Fast setting alone. The
+   * reference path stays dense either way. */
+  return eng.sparseAll === true && !refs ? recipe : null;
 }
 
 /**

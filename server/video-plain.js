@@ -71,6 +71,35 @@ export const TAOMATE_ROW = "videoH3Turbo3Small";
 export const taomateNeeded = (steps) => `${steps} steps needs the TaoMate 3-step LoRA (182 MB), which is not `
   + "downloaded. Download it, or pick 4 or more steps.";
 
+/** Each H3 speed-up's own row (models.js, addonFor "video"), by the build it is. */
+export const SPEEDUP_ROWS = Object.freeze({ 3: TAOMATE_ROW, 4: "videoH3Turbo4", 8: "videoH3Turbo8" });
+
+/**
+ * THE SPEED-UP A STEP COUNT NEEDS, when it is not on disk; null when it is,
+ * or when none is needed. Mirrors workflow.js h3TurboLoraFor on the plain
+ * path: 3 or fewer loads TaoMate, 4 to turbo4MaxSteps the 4-step file, up to
+ * turboMaxSteps the 8-step file, and above that the bare model, which needs
+ * nothing. Every speed-up is optional, so a missing one is a download offer,
+ * never a quiet swap to another file run at the wrong step count. With
+ * references the reference build runs its own count (h3MatchedSteps), so any
+ * 4- or 8-step file will do there. `eng.turboBuilds` is config.js's reading
+ * of the disk; an engine without it (LTX) or with fixed steps (FastH3) is
+ * not judged.
+ */
+export function speedupNeeded(eng, { steps, refs = false } = {}) {
+  const tb = eng?.turboBuilds;
+  const n = Number(steps);
+  if (!tb || eng.fixedSteps || !Number.isFinite(n) || n > (eng.turboMaxSteps ?? 12)) return null;
+  const need = (build) => ({ build, row: SPEEDUP_ROWS[build],
+    error: build === 3 ? taomateNeeded(n)
+      : `${n} steps needs H3's ${build}-step speed-up (1.96 GB), which is not downloaded. Download it, or pick `
+        + "another step count." });
+  if (refs) return tb.four || tb.eight ? null : need(8);
+  if (n <= (eng.turbo3MaxSteps ?? 3)) return tb.three ? null : need(3);
+  if (n <= (eng.turbo4MaxSteps ?? 5)) return tb.four ? null : need(4);
+  return tb.eight ? null : need(8);
+}
+
 /* ── references on an engine that takes none ─────────────────────────────── */
 
 const WHY_NO_REFS = {
@@ -302,14 +331,17 @@ export function videoPlan(b = {}, { engineKey, eng = {}, h3 = null, framed = fal
     }
   }
 
-  /* 3 steps or fewer is TaoMate's slot. Without the file there, the slot
-   * falls back to a 4-step name that may not be on disk either, and a 4-step
-   * build at 3 steps is a different model used wrongly. Refused, with the
-   * download offered (needsModel opens the model window on that row). The
-   * reference path is not the slot's: it runs its own build's count above. */
-  if (engineKey === "h3" && !(pictures || audios) && eng.turboBuilds && !eng.turboBuilds.three
-      && steps <= (eng.turbo3MaxSteps ?? 3)) {
-    return { refusal: { error: taomateNeeded(steps), reason: "taomate-missing", needsModel: TAOMATE_ROW }, warnings, notes };
+  /* A step count whose speed-up is not on disk: each slot falls back to
+   * another build's name (which may not be on disk either), and a build run
+   * at another build's step count is a different model used wrongly.
+   * Refused, with the download offered (needsModel opens the model window on
+   * that row). The speed-ups are optional; Best (20) needs none. */
+  if (engineKey === "h3") {
+    const need = speedupNeeded(eng, { steps, refs: !!(pictures || audios) });
+    if (need) {
+      return { refusal: { error: need.error, reason: need.build === 3 ? "taomate-missing" : "speedup-missing",
+        needsModel: need.row }, warnings, notes };
+    }
   }
 
   /* Sparse attention: the saved setting, or the request's own when it names
