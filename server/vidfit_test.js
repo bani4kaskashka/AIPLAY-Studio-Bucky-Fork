@@ -555,7 +555,9 @@ test("§6 web/vidfit.js on three machines: chips, start size, the not-offered li
 
   /* An 8 GB card, 32 GB of RAM, on H3. */
   eng.value = "h3"; vs.innerHTML = sizes("custom"); secs.value = "8";
-  assert.equal(vs.value, "1344x768", "a new list sits on its own first size");
+  /* The first size is 1280x720 off NVIDIA (config.js prefers720p), else 1344x768. */
+  const first = config.video.engines.h3.sizes[0];
+  assert.equal(vs.value, `${first.w}x${first.h}`, "a new list sits on its own first size");
   paint(st(status(8, 32)));
   assert.equal(vs.value, "960x544", "the size list starts on the card's size");
   assert.equal(secs.value, "5", "and the length on its measured one");
@@ -585,7 +587,7 @@ test("§6 web/vidfit.js on three machines: chips, start size, the not-offered li
    * and the reading, when it lands, still moves an untouched list. */
   eng.value = "h3"; vs.innerHTML = sizes("custom");
   paint(st(status(0, 32)));
-  assert.equal(vs.value, "1344x768", "card not read yet: no size chosen");
+  assert.equal(vs.value, `${first.w}x${first.h}`, "card not read yet: no size chosen");
   paint(st(status(8, 32)));
   assert.equal(vs.value, "960x544", "the card read: the untouched list moves to its size");
 

@@ -6,7 +6,7 @@
 import fs from "node:fs";
 import { autoVramFlags } from "./comfyargs.js";
 /* The card tiers' sizes join H3's size list (below the engines): pure data. */
-import { H3_TIERS, H3_SOL_ATTN, H3_MORE_MOTION } from "./h3tier.js";
+import { H3_TIERS, H3_SOL_ATTN, H3_MORE_MOTION, H3_BLOCK_CACHE } from "./h3tier.js";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -42,6 +42,12 @@ const MUSIC_ONLY = process.env.AIPLAY_MUSIC_ONLY !== undefined
  * local is needed, not ComfyUI and not a card. Only the launcher turns it on,
  * so full Studio never shows a page that spends credits. */
 const CLOUD_ONLY = !MUSIC_ONLY && process.env.AIPLAY_CLOUD_ONLY === "1";
+/* The RunPod entry point (launcher: "RunPod GPU"; scripts/start-remote.mjs):
+ * Images and Video render on the person's own RunPod Pod through the AIPLAY
+ * worker (server/engine/remote-*.js), so no local ComfyUI starts. RunPod bills
+ * by the hour, so like the Comfy API mode only the launcher turns it on and
+ * full Studio never shows it (/api/runpod answers in this mode only). */
+const REMOTE_ONLY = !MUSIC_ONLY && !CLOUD_ONLY && process.env.AIPLAY_REMOTE_ONLY === "1";
 const RIG = process.env.AIPLAY_RIG || saved.rig
   || (MUSIC_ONLY ? path.join(APPDATA, "rig") : "D:\\AI\\aiplay-studio-bench");
 /* Where model weights live. A ComfyUI Desktop install keeps them outside the
@@ -124,6 +130,13 @@ export function isLightH3({ gpu, torchBackend } = {}, ramBytes = os.totalmem()) 
     || ramBytes < 30 * 2 ** 30;
 }
 const LIGHT_H3 = isLightH3(saved);
+/** Video starts at 720p on any card but NVIDIA (the H3 block below): an AMD
+ *  or Intel card, or the CPU. A machine whose card was never recorded keeps
+ *  the trained size. */
+export function prefers720p({ gpu, torchBackend } = {}) {
+  return ["rocm", "xpu", "cpu"].includes(torchBackend) || gpu?.vendor === "amd" || gpu?.vendor === "intel";
+}
+const PREFER_720P = prefers720p(saved);
 
 /** Find a python inside a ComfyUI rig, trying every layout in the wild.
  *
@@ -264,7 +277,8 @@ export const config = {
   dataDir: APPDATA,
   musicOnly: MUSIC_ONLY,
   cloudOnly: CLOUD_ONLY,
-  comfyAutoStart: !MUSIC_ONLY && !CLOUD_ONLY,
+  remoteOnly: REMOTE_ONLY,
+  comfyAutoStart: !MUSIC_ONLY && !CLOUD_ONLY && !REMOTE_ONLY,
   // Optional external-audio RVQ preprocessing. Explicit opt-in; never download
   // or execute a research workspace just because one exists on this machine.
   musicInput: {
@@ -342,7 +356,7 @@ export const config = {
   outputDir: process.env.AIPLAY_OUTPUT || saved.outputDir
     /* Comfy API mode with no ComfyUI set up keeps its results in app data,
      * like music-only; with one, beside everything else Studio made. */
-    || (MUSIC_ONLY || (CLOUD_ONLY && !process.env.AIPLAY_RIG && !saved.rig)
+    || (MUSIC_ONLY || ((CLOUD_ONLY || REMOTE_ONLY) && !process.env.AIPLAY_RIG && !saved.rig)
       ? path.join(APPDATA, "output") : path.join(RIG, "ComfyUI", "output")),
   settingsFile: SETTINGS_FILE,
   // Where `LoadLatent` looks. Its `latent` input is a name RELATIVE to this, so
@@ -1629,6 +1643,12 @@ export const config = {
      * sets them; workflow.js h3SparseFor reads both. */
     sparseAll: false,
     solAttnTau: null,
+    /* OPT-IN, EXPERIMENTAL: T8mars's MiniMax H3 Block Cache custom node
+     * (h3tier.js H3_BLOCK_CACHE) on the plain path, where no sparse attention
+     * runs. video_settings block_cache; art.js videoBlockCache() asks the
+     * engine for the node first. */
+    blockCache: false,
+    blockCacheRecipe: H3_BLOCK_CACHE,
 
     /* H3 ALWAYS renders audio — there is no video-only path, and moving the
      * audio shift changes its level without changing the time it costs
@@ -2071,6 +2091,26 @@ export const refreshTaoMate = () => refreshH3Speedups().three;
   }
 }
 
+/* 720P FIRST OFF NVIDIA (the owner's call, 2026-09-25): on an AMD or Intel
+ * card, or no card, H3 (and FastH3, which copies this below) starts at
+ * 1280x720 and lists it first, ahead of the 1344x768 it was trained at. 720
+ * is not on H3's 32 px grid; the model pads the latent to its 2x2 patch and
+ * crops the output back (comfy/ldm/minimax/model.py _forward), so it renders
+ * at exactly 1280x720. `nativeWidth`/`nativeHeight` keep the trained size
+ * for anything that measures against it. LTX already starts at 1280x704. A
+ * smaller card's tier (h3tier.js) still starts at its own measured size. */
+{
+  const h3 = config.video.engines.h3;
+  h3.nativeWidth = h3.width;
+  h3.nativeHeight = h3.height;
+  if (PREFER_720P) {
+    h3.width = 1280;
+    h3.height = 720;
+    const i = h3.sizes.findIndex((z) => z.w === 1280 && z.h === 720);
+    if (i > 0) h3.sizes.unshift(...h3.sizes.splice(i, 1));
+  }
+}
+
 /* ── FastH3 ──────────────────────────────────────────────────────────────
  * FastVideo's DMD2 distillation of MiniMax H3 (FastVideo/FastVideo-FastH3-Comfy):
  * eight steps with no turbo LoRA, the same text encoder and VAEs as H3, and
@@ -2107,6 +2147,8 @@ config.video.engines.fasth3 = {
     minTokens: 12288, extraTokens: 256, sinkConditioning: "exact_kv_and_rows" },
   /* H3's sol-attn switch is H3's: FastH3 always runs its own VSA above. */
   sparse: null, solAttn: null,
+  /* FastH3 always runs BlockSparseAttention (VSA), which the block cache refuses. */
+  blockCache: false, blockCacheRecipe: null,
   /* NOT IN THE MAIN ENGINE LIST (the H3 lab, 2026-09-24): slower than the Fast
    * setting in every pair (1.37x the wall at 1344x768, 8 s; 1.22x at 960x544)
    * and good on one prompt of three (a white blob on one, colour changes on

@@ -47,6 +47,9 @@ import { qwenImageGraph, QWEN_IMAGE_PRESET, QWEN_DRAFT, qwenImageSettings } from
 import { validateVideoLoras } from "./video-lora-validation.js";
 import { qwenImageStatus, stageQwenReferences, QWEN_IMAGE_ENGINE } from "./qwen-status.js";
 import { createEngineRoutes } from "./engine/routes.js";
+/* RunPod rendering (the launcher's "RunPod GPU" mode): the worker client, the
+ * account (Pods and billing) and their routes, contributed by nemesisone-dev. */
+import { createRemoteRoutes } from "./engine/remote-routes.js";
 import { JobRunner } from "./jobs.js";
 import { Library } from "./library.js";
 import { isNativeLibraryWav } from "./library-wav.js";
@@ -1294,7 +1297,7 @@ function probeOne(py, mods, timeoutMs = 20_000) {
 }
 let probedBy = {};
 async function pythonPackages() {
-  if (config.musicOnly || config.cloudOnly) return {};
+  if (config.musicOnly || config.cloudOnly || config.remoteOnly) return {};
   if (packageCache && Date.now() - packageCache.at < 30_000) return packageCache.value;
   const value = {};
   const by = {};
@@ -1821,7 +1824,7 @@ const onAmd = () => config.torchBackend === "rocm" || config.gpu?.vendor === "am
 /* Whether this process starts ComfyUI. Always in full Studio; in music-only
  * only when a YuE2 checkpoint makes YuE2-through-ComfyUI possible. Sent in
  * /api/status so the launcher knows whether to wait for the engine. */
-let comfyWanted = !config.musicOnly && !config.cloudOnly;
+let comfyWanted = !config.musicOnly && !config.cloudOnly && !config.remoteOnly;
 
 /** YuE2 checkpoints in any checkpoints folder the engine loads from. */
 async function findYue2Checkpoints() {
@@ -1965,6 +1968,17 @@ async function musicModelChoices(cat) {
       value: "yue2", engine: "yue2", precision: null, label: "YuE2 3B (Python kit)",
       available: !!byId.musicYue2.ready, note: byId.musicYue2.ready ? null : "not installed",
     });
+  }
+  /* RUNPOD GPU MODE: the ComfyUI engines render on the Pod, so this PC's disk
+   * does not decide whether they are ready. The Pod's worker checks each graph
+   * against its own files and names any that are missing. Native GGUF and the
+   * Python kit still run here and keep their own answer. */
+  if (config.remoteOnly) {
+    for (const c of out) {
+      if (c.api || !["minimax-music3", "ace-step15", "yue2-comfy"].includes(c.engine)) continue;
+      c.available = true;
+      c.note = "on your RunPod";
+    }
   }
   musicChoicesCache = { at: Date.now(), value: out };
   return out;
@@ -3094,6 +3108,48 @@ const engineRoutes = createEngineRoutes({
  * injected at construction because the client is a module-level singleton and
  * CLIP_DIR, IMAGE_DIR and the closure above are all built in this file. */
 engineDoor.setAdopter(engineRoutes.adopt);
+/* RUNPOD, in its own launch mode only (config.remoteOnly). A Pod bills by the
+ * hour and its account routes can create one, so full Studio never builds these
+ * routes: /api/runpod answers there with a refusal naming the mode. Results
+ * are adopted into the same library as a local render; audio goes to the
+ * music library under a runpod- name. */
+const remoteRoutes = config.remoteOnly ? createRemoteRoutes({ config, getSecret, setSecret, clearSecret,
+  append: prov.append, actorFrom: prov.actorFrom,
+  adopt: async (details) => {
+    if (/\.(wav|flac|mp3|ogg|opus)$/i.test(details.output.file)) {
+      /* "aiplay_" first: the library lists only its own prefixes (library.js
+       * PREFIXES), and a "runpod-" name never appeared in it. */
+      const name = `aiplay_runpod_${details.runId}_${path.basename(details.output.file)}`;
+      await rename(path.join(config.outputDir, details.output.subfolder, details.output.file), path.join(config.outputDir, name));
+      library.remember(name, { title: details.record.label || name, engine: "runpod", runId: details.runId });
+      await library.save();
+      return name;
+    }
+    return engineRoutes.adopt(details);
+  },
+}) : null;
+/* MUSIC ON THE POD: the queue builds the same graph it builds for this PC and
+ * hands it here instead of to the local engine (jobs.js #runRemote). The song
+ * comes back through the adopt above (audio -> the library) and is filed by the
+ * queue's usual "done" path, title, tags and all. */
+if (remoteRoutes) jobs.setRemote(async ({ graph, label, actor, isCancelled, onState }) => {
+  const c = await remoteRoutes.start();
+  const sent = await c.submit({ graph, bindings: [], label: `AIPLAY music · ${label || "song"}`, actor });
+  const FINAL = new Set(["completed", "cancelled", "failed", "uncertain"]);
+  let cancelSent = false;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 2500));
+    const row = c.status().jobs.find((j) => j.id === sent.id);
+    if (!row) continue;
+    if (isCancelled() && !cancelSent && !FINAL.has(row.state)) { cancelSent = true; await c.cancel(sent.id).catch(() => {}); }
+    onState(row.state);
+    if (!FINAL.has(row.state)) continue;
+    if (row.state !== "completed") throw new Error(row.error || `The RunPod job ended ${row.state}.`);
+    const audio = (row.outputs || []).find((o) => /\.(wav|flac|mp3|ogg|opus)$/i.test(o.localFile || o.file || ""));
+    if (!audio?.localFile) throw new Error("The Pod finished but returned no audio file.");
+    return { file: audio.localFile, runId: row.runId || null };
+  }
+});
 
 /* THE ENGINE'S OWN BACKSTOP ASKS HERE. server/comfy_nodes/aiplay_safety_gate.py
  * sends every graph posted to the engine (including through a revealed or
@@ -3122,6 +3178,10 @@ const server = http.createServer(async (req, res) => {
   const p = url.pathname;
 
   try {
+    if (p === "/api/runpod" || p.startsWith("/api/runpod/")) {
+      if (!remoteRoutes) return json(res, 404, { error: "RunPod rendering is the launcher's RunPod GPU mode. Start Studio from there to use it." });
+      if (await remoteRoutes(req, res, url)) return;
+    }
     /* Video Workflow — the whole music-video pipeline, additive. Claims only
      * its own prefix and returns false otherwise, so upstream routing below is
      * untouched and a rebase never has to reason about it. */
@@ -3331,6 +3391,8 @@ const server = http.createServer(async (req, res) => {
           ui: { level: config.ui.level, levelBy: config.ui.levelBy },
           // The launcher's "Use Comfy API" mode: the web app shows the Comfy API page only.
           cloudOnly: !!config.cloudOnly,
+          // The launcher's "RunPod GPU" mode: Images and Video render on the saved Pod.
+          remoteOnly: !!config.remoteOnly,
           engineExpected: comfyWanted,
           /* The real-audio tokenizer (musicYue2Tokenizer): with it on disk,
            * Continue works on any track in the library, not only on takes. */
@@ -3412,6 +3474,8 @@ const server = http.createServer(async (req, res) => {
             engines: Object.fromEntries(Object.entries(config.video.engines).map(([k, e]) => [k, {
               label: e.label, sizes: e.sizes, seconds: e.seconds, fps: e.fps,
               width: e.width, height: e.height, steps: e.steps ?? null,
+              /* The trained size where the start size differs (720p off NVIDIA, config.js). */
+              nativeWidth: e.nativeWidth ?? e.width, nativeHeight: e.nativeHeight ?? e.height,
               frameRule: e.frameRule,
               costFixedSeconds: e.costFixedSeconds, costRate: e.costRate, costExponent: e.costExponent,
               /* The step counts at which each distillation takes over. Sent so
@@ -4332,7 +4396,9 @@ const server = http.createServer(async (req, res) => {
           && musicEngine !== "yue2-comfy") {
         const capId = MODEL_TO_CAPABILITY[musicEngine];
         const cap = capId ? (await models.status()).find((c) => c.id === capId) : null;
-        if (cap && !cap.ready) {
+        /* RunPod GPU mode: the song renders on the Pod, whose worker checks the
+         * graph against ITS files and names any that are missing. */
+        if (cap && !cap.ready && !config.remoteOnly) {
           const gb = ((cap.totalBytes - cap.haveBytes) / 1e9).toFixed(1);
           return json(res, 400, {
             error: cap.gated
@@ -4653,8 +4719,10 @@ const server = http.createServer(async (req, res) => {
           return json(res, 400, { error: "ACE-Step has no preview pass; turbo is already 8 steps. Press Create instead.", engine: musicEngine, reason: "no-preview" });
         }
         const ace = await aceShelf();
-        const dit = ace.dits.includes(config.music.aceModel) ? config.music.aceModel : ace.dits[0];
-        if (!dit || !ace.ready) {
+        const dit = ace.dits.includes(config.music.aceModel) ? config.music.aceModel
+          : ace.dits[0] || (config.remoteOnly ? (config.music.aceModel || "acestep_v1.5_turbo.safetensors") : undefined);
+        if (config.remoteOnly && !ace.lm) ace.lm = config.music.aceLm || "qwen_4b_ace15.safetensors";
+        if (!config.remoteOnly && (!dit || !ace.ready)) {
           return json(res, 400, {
             error: `ACE-Step 1.5 is not ready: ${ace.missing || "no ACE-Step 1.5 DiT in a diffusion_models folder"}. Open the Models screen.`,
             engine: musicEngine, reason: "weights-missing", needsModel: "musicAceStep15",
@@ -4736,10 +4804,10 @@ const server = http.createServer(async (req, res) => {
         if (body.checkpoint !== undefined && (typeof body.checkpoint !== "string" || !body.checkpoint.trim() || /[/\\]|\.\./.test(body.checkpoint))) {
           return json(res, 400, { error: "Choose an installed YuE2 checkpoint filename.", reason: "checkpoint" });
         }
-        const ckpt = body.checkpoint ?? config.music.yue2Checkpoint;
+        const ckpt = body.checkpoint ?? config.music.yue2Checkpoint ?? (config.remoteOnly ? "yue2_3b_int8_convrot.safetensors" : undefined);
         const shelf = await scanBases(await modelBases());
         const found = ckpt && shelf.find((f) => f.folder === "checkpoints" && f.name === ckpt);
-        if (!found) {
+        if (!found && !config.remoteOnly) {
           /* NONE AT ALL: a fresh install whose music default is YuE2 through
            * ComfyUI (server/music-default.js). The page opens the download for
            * that row (needsModel), not a list to pick from. */
@@ -4759,7 +4827,7 @@ const server = http.createServer(async (req, res) => {
             engine: musicEngine, reason: "weights-missing",
           });
         }
-        if (body.checkpoint !== undefined && (await probeModel(found.full)).family !== "yue2") {
+        if (found && body.checkpoint !== undefined && (await probeModel(found.full)).family !== "yue2") {
           return json(res, 400, { error: "That checkpoint is not a detected YuE2 model.", reason: "checkpoint" });
         }
         yueCheckpoint = ckpt;
@@ -7781,7 +7849,9 @@ const server = http.createServer(async (req, res) => {
         if (config.musicOnly && e !== "yue2-gguf" && !(e === "yue2-comfy" && comfyWanted)) return json(res,400,{error:"Start full Studio to use other engines."});
         const capId = MODEL_TO_CAPABILITY[e];
         const cap = capId ? (await models.status()).find((c) => c.id === capId) : null;
-        if (e !== "yue2-gguf" && cap && !cap.ready) {
+        /* RunPod GPU mode: the ComfyUI engines' files are on the Pod, not here. */
+        const onPod = config.remoteOnly && ["minimax-music3", "ace-step15", "yue2-comfy"].includes(e);
+        if (e !== "yue2-gguf" && cap && !cap.ready && !onPod) {
           const gb = ((cap.totalBytes - cap.haveBytes) / 1e9).toFixed(1);
           return json(res, 400, {
             error: cap.gated
@@ -12292,6 +12362,13 @@ server.listen(config.uiPort, "127.0.0.1", async () => {
   await batch.load();
   const b = batch.status().run;
   if (b) console.log(`  batch "${b.name}": ${b.done}/${b.total} done, ${b.state}`);
+  if (config.remoteOnly) {
+    /* RunPod mode: the saved worker's jobs are picked up again (polling and
+     * downloads resume with their original ids). No local ComfyUI. */
+    await remoteRoutes.start().catch((error) => console.warn(`  [runpod] ${error.message}`));
+    console.log("  RunPod mode: Images and Video render on your RunPod worker. ComfyUI is not started here.");
+    return;
+  }
   if (config.cloudOnly) {
     /* Comfy API mode needs nothing local: no ComfyUI, no card. Runs left
      * queued by the last session are collected now. */

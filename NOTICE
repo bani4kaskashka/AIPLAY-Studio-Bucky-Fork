@@ -524,6 +524,19 @@ RUNTIME DEPENDENCIES (separate installations)
                            run and the rest of the app is unaffected.
 
 ────────────────────────────────────────────────────────────────────────────────
+BUNDLED THIRD-PARTY CODE
+────────────────────────────────────────────────────────────────────────────────
+    MiniMax H3 Block Cache (T8)
+                           Apache-2.0, Copyright T8mars.
+                           Source: https://github.com/T8mars/comfyui-minimax-h3-blockcache-T8
+                           Shipped unmodified at commit 36336dcee1ecb49a5ee98
+                           426456aeb353c8535bd (v1.0.4) in
+                           server/comfy_nodes/comfyui-minimax-h3-blockcache-T8/
+                           with its LICENSE, and copied into ComfyUI's
+                           custom_nodes when the engine starts. Used only when
+                           video_settings block_cache is switched on.
+
+────────────────────────────────────────────────────────────────────────────────
 TRADEMARKS
 ────────────────────────────────────────────────────────────────────────────────
 

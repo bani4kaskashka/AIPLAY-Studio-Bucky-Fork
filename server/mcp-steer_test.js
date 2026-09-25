@@ -39,8 +39,9 @@ console.log("\n§1  the simple way on the Video screen");
   ok("three chips above More controls", /id="vidQualityRow"[\s\S]*?data-vq="fast"[\s\S]*?data-vq="standard"[\s\S]*?data-vq="best"[\s\S]*?id="vidAdv"/.test(html));
   ok("...a click sets the slider and repaints", /\$\("vidSteps"\)\.value = String\(steps\);\n\s+vidPaint\(\);/.test(app));
   ok("...the chips light up on the slider's value", /aria-pressed", !get && stNow === want \? "true" : "false"/.test(app));
+  /* ...and in RunPod GPU mode (`remote`), where the Pod's LTX preset takes no steps. */
   ok("...and the row hides with the slider on LTX and on a fixed-step engine (FastH3)",
-    /const noSteps = cur === "ltx" \|\| !!eng\.fixedSteps;/.test(app) && /qRow\.hidden = noSteps;/.test(app));
+    /const noSteps = remote \|\| cur === "ltx" \|\| !!eng\.fixedSteps;/.test(app) && /qRow\.hidden = noSteps;/.test(app));
   ok("the status carries turbo3Ready per engine", /turbo3Ready: \/taomate\/i\.test\(String\(e\.turboLora3 \|\| ""\)\),/.test(index));
 
   /* EVERY STEP COUNT ON THE SCREEN IS THE SERVER'S, and the server's follows

@@ -1887,6 +1887,18 @@ export function h3SparseFor(eng, { steps, refs = false, sparse, continuation = f
 }
 
 /**
+ * H3's block cache for one render (h3tier.js H3_BLOCK_CACHE), or null.
+ * `blockCache` is the render's answer from art.js videoBlockCache(): true only
+ * where the setting is on AND the engine has the node. Plain path only: no
+ * references, continuation or video-to-video (none measured with it), and
+ * never beside sparse attention, which the node refuses.
+ */
+export function h3BlockCacheFor(eng, { blockCache = false, refs = false, continuation = false, control = false, sparse = null } = {}) {
+  if (blockCache !== true || !eng?.blockCacheRecipe || refs || continuation || control || sparse) return null;
+  return eng.blockCacheRecipe;
+}
+
+/**
  * THE STEP COUNT A REFERENCE RENDER RUNS, matched to the file that loads.
  *
  * The Fast chip is 3 steps, for TaoMate, which is fl2v-only; with references
@@ -2011,7 +2023,11 @@ export function videoGraphH3({ prompt, seed, seconds, width, height, steps,
                                 * undefined for the saved setting. Only the Fast setting takes
                                 * it (h3SparseFor); art.js videoSparse() turns it into "off"
                                 * where the engine lacks the node. FastH3 ignores it. */
-                               sparse = undefined }) {
+                               sparse = undefined,
+                               /* H3's block cache for THIS render: true only where the setting is on
+                                * and the engine has the node (art.js videoBlockCache). h3BlockCacheFor
+                                * decides whether this graph can carry it. */
+                               blockCache = false }) {
   const v = { ...config.video, ...(config.video.engines[engine] || config.video.engines.h3), ...(models || {}) };
   /* A distillation with a trained schedule runs at that schedule whatever the
    * slider says: FastH3 is 8 steps, and 20 of them is not a better FastH3. */
@@ -2189,7 +2205,18 @@ export function videoGraphH3({ prompt, seed, seconds, width, height, steps,
       min_tokens: sparseCfg.minTokens, extra_tokens: sparseCfg.extraTokens,
       sink_conditioning: sparseCfg.sinkConditioning, verbose: false } },
   } : {};
-  const SAMPLE_MODEL = sparseCfg ? ["81", 0] : ["6", 0];
+  /* THE BLOCK CACHE sits where 81 would, after the shift (its start/end percent
+   * are sampling progress), and only where 81 is absent: the node refuses to
+   * run beside BlockSparseAttention. */
+  const cacheCfg = h3BlockCacheFor(v, { blockCache, refs: onRefPath, continuation: !!cont,
+    control: !!(controlVideo && controlPatch), sparse: sparseCfg });
+  const cacheNodes = cacheCfg ? {
+    82: { class_type: cacheCfg.node, inputs: { model: ["6", 0],
+      residual_diff_threshold: cacheCfg.threshold, start_percent: cacheCfg.startPercent,
+      end_percent: cacheCfg.endPercent, max_consecutive_hits: cacheCfg.maxConsecutiveHits,
+      cache_device: cacheCfg.cacheDevice, metric_stride: cacheCfg.metricStride, verbose: false } },
+  } : {};
+  const SAMPLE_MODEL = sparseCfg ? ["81", 0] : cacheCfg ? ["82", 0] : ["6", 0];
   /* ── VIDEO-TO-VIDEO ──────────────────────────────────────────────────────
    *
    * A control video drives the render frame by frame instead of one opening
@@ -2338,7 +2365,7 @@ export function videoGraphH3({ prompt, seed, seconds, width, height, steps,
     Object.assign(g, controlNodes, controlApply, attentionNodes);
     g[6] = { class_type: "MiniMaxH3SigmaShift",
       inputs: { model: MODEL, shift_video: shiftV, shift_audio: shiftA } };
-    Object.assign(g, sparseNodes);
+    Object.assign(g, sparseNodes, cacheNodes);
     g[7] = { class_type: "BasicGuider", inputs: { model: SAMPLE_MODEL, conditioning: [pos, 0] } };
     g[8] = { class_type: "BasicScheduler", inputs: { model: SAMPLE_MODEL, scheduler: v.scheduler, steps: steps ?? v.steps, denoise: 1 } };
     g[9] = { class_type: "KSamplerSelect", inputs: { sampler_name: sampler } };
@@ -2398,6 +2425,7 @@ export function videoGraphH3({ prompt, seed, seconds, width, height, steps,
       inputs: { model: MODEL, shift_video: shiftV, shift_audio: shiftA },
     },
     ...sparseNodes,
+    ...cacheNodes,
     7: { class_type: "BasicGuider", inputs: { model: SAMPLE_MODEL, conditioning: [cont ? "74" : sound ? "23" : BASE, 0] } },
     8: { class_type: "BasicScheduler", inputs: { model: SAMPLE_MODEL, scheduler: v.scheduler, steps: steps ?? v.steps, denoise: 1 } },
     9: { class_type: "KSamplerSelect", inputs: { sampler_name: sampler } },

@@ -1073,7 +1073,8 @@ function musicEnginePaint() {
      * here re-enabled Create for a MiniMax user whose engine was still
      * STARTING… — caught in review before it shipped. The painter may add a
      * reason to disable; it may not remove one it does not own. */
-    create.disabled = noPath || (eng.runtime === "audiocpp" ? !nativeReady : !state.engineReady);
+    /* RunPod GPU mode (state.remoteOnly): the queue renders on the Pod. */
+    create.disabled = noPath || (eng.runtime === "audiocpp" ? !nativeReady : !state.engineReady && !state.remoteOnly);
     create.title = noPath ? `${eng.label} has no render path from this button yet.` : "";
   }
 
@@ -3458,7 +3459,7 @@ async function generate(preview, mixSeed) {
   } finally {
     setTimeout(() => {
       const eng = (state.musicEngines || {})[state.musicEngine];
-      $("btnCreate").disabled = $("btnPreview").disabled = eng?.runtime === "audiocpp" ? !nativeMusicReady(eng) : !state.engineReady;
+      $("btnCreate").disabled = $("btnPreview").disabled = eng?.runtime === "audiocpp" ? !nativeMusicReady(eng) : !state.engineReady && !state.remoteOnly;
     }, 400);
   }
 }
@@ -7868,6 +7869,8 @@ function vidOfferSpeedup(build) {
 
 function vidPaint() {
   const on = !!state.video?.enabled;
+  /* RunPod GPU mode (web/runpod-integrated.js): the clip renders on the Pod. */
+  const remote = $("vidRenderWhere")?.value === "runpod";
   const engines = state.video?.engines || {};
   const cur = state.video?.engine || "ltx";
   const eng = engines[cur] || {};
@@ -7931,7 +7934,8 @@ function vidPaint() {
     const h = Math.min(Math.max(Number($("vidH").value) || 704, 256), 1920);
     const q = (n) => (cur === "ltx" ? Math.max(32, Math.floor(n / 2 / 32) * 32) * 2 : n);
     const rw = q(w), rh = q(h);
-    const nat = eng.width && eng.height ? (w * h) / (eng.width * eng.height) : null;
+    const nw = eng.nativeWidth || eng.width, nh = eng.nativeHeight || eng.height;
+    const nat = nw && nh ? (w * h) / (nw * nh) : null;
     $("vidSizeNote").textContent =
       (rw !== w || rh !== h ? `renders ${rw}×${rh} · ` : "")
       + (nat ? `${Math.round(nat * 100)}% of native` : "")
@@ -7943,8 +7947,10 @@ function vidPaint() {
   /* Never greyed out for being switched off: a disabled button explains
    * nothing, and the switch lived in Settings where nobody on this screen
    * would look. Pressing it asks, in a drawer, and switches it on from there. */
-  $("vidCreate").disabled = false;
-  $("vidIntro").textContent = on
+  $("vidCreate").disabled = $("vidCreate").dataset.runpodBusy === "1";
+  $("vidIntro").textContent = remote
+    ? "Text-to-video on your RunPod with LTX 2.5."
+    : on
     ? "Short clips with " + (eng.label || "the video engine") + "."
     : "Video is switched off. Press Render and Studio asks to switch it on.";
   $("vidEngineNote").textContent = cur === "ltx"
@@ -7954,7 +7960,7 @@ function vidPaint() {
     : "One pass at full size. Measured here at 308 s for 5 s at 1344x768, or 660 s at 20 steps. Takes references: pictures that keep a person the same from clip to clip.";
   // LTX has no single step count — it is baked into two fixed sigma schedules.
   // FastH3 has one, and it is fixed (eng.fixedSteps): no slider for either.
-  const noSteps = cur === "ltx" || !!eng.fixedSteps;
+  const noSteps = remote || cur === "ltx" || !!eng.fixedSteps;
   const stepRow = $("vidSteps").closest(".pv");
   if (stepRow) {
     stepRow.hidden = noSteps;
@@ -8197,7 +8203,9 @@ function vidPaint() {
    * receipt does not say what they cost in time. */
   const keepSaid = keeping && !!$("vidCharacter")?.dataset?.receipt;
 
-  $("vidEst").textContent = on
+  $("vidEst").textContent = remote
+    ? "The Pod must stay running until the clip is on this PC."
+    : on
     ? "about " + fmt(secs) + (measured ? " on this PC" : "") + " once the engine is idle · " + frames + " frames at " + fps + " fps"
       + (short ? " · ⚠ under the model's trained range (124+)" : "")
       + (small && !short ? " · ⚠ below native size, expect softer detail" : "")
@@ -9226,6 +9234,14 @@ async function loadClips() {
  * it gets the same tools: search, filter, sort. Everything is client-side
  * because the whole list is already in memory and a round trip per keystroke
  * would be slower and worse. */
+/* RunPod results are adopted by the same server routes as local renders, but
+ * their completion is announced by web/runpod-integrated.js rather than the
+ * local engine socket. Re-read only the shelf that changed. */
+document.addEventListener("aiplay:remote-output", (event) => {
+  if (event.detail?.kind === "img") loadImages();
+  if (event.detail?.kind === "vid") loadClips();
+});
+
 function paintClips() {
   /* Tear the hover preview down BEFORE the repaint. innerHTML is replaced below,
    * which detaches whatever tile the pointer is resting on — and no mouseout
@@ -16771,7 +16787,8 @@ function imgEffectiveEngine() {
 let imgQwenStatus = null, imgQwenChecking = false, imgQwenRequest = 0, imgMakePending = false;
 let imgQwenRequestedKey = "", imgQwenStatusKey = "";
 function imgQueueGate() {
-  $("imgGo").disabled = imgMakePending || (imgEffectiveEngine() === "qwen-image-2.1"
+  const remote = $("imgRenderWhere")?.value === "runpod";
+  $("imgGo").disabled = $("imgGo").dataset.runpodBusy === "1" || imgMakePending || (!remote && imgEffectiveEngine() === "qwen-image-2.1"
     && (imgQwenChecking || imgQwenStatus?.ready !== true || imgQwenStatusKey !== imgQwenQuery().toString()));
 }
 function imgQwenShape() {
@@ -20520,7 +20537,8 @@ function applyStatus(s) {
    * is worth a line in the rail is the states where something is NOT ready,
    * and the work box already says what is happening. */
   // Comfy API mode has no local engine to wait for: nothing to say.
-  const line = state.cloudOnly ? ""
+  // Nor does RunPod GPU mode: its renders go to the Pod.
+  const line = state.cloudOnly || s.config?.remoteOnly ? ""
     : state.musicOnly
     ? (s.config?.musicEngine === "yue2-comfy"
         ? (s.engine.ready ? "" : "MUSIC ONLY · STARTING COMFYUI…")
@@ -20528,7 +20546,9 @@ function applyStatus(s) {
     : s.engine.ready ? "" : "STARTING…";
   $("engineLine").textContent = line;
   $("engineLineWrap").hidden = !line;
-  $("btnCreate").disabled = $("btnPreview").disabled = !s.engine.ready;
+  /* RunPod GPU mode: no local engine to wait for; the queue renders on the Pod. */
+  state.remoteOnly = !!s.config?.remoteOnly;
+  $("btnCreate").disabled = $("btnPreview").disabled = !s.engine.ready && !state.remoteOnly;
 
   const b = s.engine.backend;
   const warn = $("engineWarn");

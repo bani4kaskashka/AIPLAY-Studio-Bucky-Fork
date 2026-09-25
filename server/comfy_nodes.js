@@ -16,6 +16,14 @@ import { fileURLToPath } from "node:url";
 
 export const STUDIO_NODES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "comfy_nodes");
 
+/**
+ * Third-party nodes Studio ships, pinned, with their licence (server/comfy_nodes/<dir>/):
+ *   comfyui-minimax-h3-blockcache-T8  T8mars, Apache-2.0, commit 36336dc (v1.0.4,
+ *     2026-09-08): MiniMaxH3BlockCacheT8, H3's opt-in block cache (h3tier.js
+ *     H3_BLOCK_CACHE, video_settings block_cache). Pure Python, no packages.
+ */
+export const VENDORED_NODES = Object.freeze(["comfyui-minimax-h3-blockcache-T8"]);
+
 /** Copy every studio node whose bytes differ. Returns { copied, kept, dir }. */
 export function deployStudioNodes(customNodesDir, sourceDir = STUDIO_NODES_DIR) {
   const copied = [], kept = [];
@@ -28,6 +36,25 @@ export function deployStudioNodes(customNodesDir, sourceDir = STUDIO_NODES_DIR) 
     if (existsSync(dst) && readFileSync(dst).equals(src)) { kept.push(name); continue; }
     writeFileSync(dst, src);
     copied.push(name);
+  }
+  /* Bundled third-party nodes, one folder each under its upstream name, so a
+   * copy ComfyUI Manager installed lands in the same folder instead of
+   * registering the node twice. Only the files the folder ships (.py and
+   * LICENSE) are written; anything else a clone has there is left alone. */
+  for (const dir of VENDORED_NODES) {
+    const from = path.join(sourceDir, dir);
+    if (!existsSync(from)) continue;
+    const to = path.join(customNodesDir, dir);
+    mkdirSync(to, { recursive: true });
+    for (const name of readdirSync(from)) {
+      if (!/.py$|^LICENSE$/.test(name)) continue;
+      const src = readFileSync(path.join(from, name));
+      const dst = path.join(to, name);
+      const rel = dir + "/" + name;
+      if (existsSync(dst) && readFileSync(dst).equals(src)) { kept.push(rel); continue; }
+      writeFileSync(dst, src);
+      copied.push(rel);
+    }
   }
   return { copied, kept, dir: customNodesDir };
 }

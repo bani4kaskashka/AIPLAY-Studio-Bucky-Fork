@@ -1752,7 +1752,7 @@ export const CATALOG = [
       ...H3_SHARED_FILES,
     ],
     note: "22.1 GB on a machine that already has H3; 42 GB without it (40 GB on AMD, Intel and lower-end PCs, which get the lighter int8 video VAE). Trained with FastVideo's sparse attention (VSA), which ComfyUI runs where its kernel exists and skips elsewhere. "
-      + "⚠ Experimental. Measured 2026-09-24 on a 16 GB card against H3's Fast setting (TaoMate 3-step): about 1.4x the wait at 1344x768, 8 s (236 s against 172 s); more camera motion, and good on 1 of 3 prompts, "
+      + "⚠ Experimental. Measured 2026-09-24 on a 16 GB card against H3's Fast setting (TaoMate 3-step): about 1.4x the wait at 1344x768, 8 s (236 s against 172 s); good on 1 of 3 prompts, "
       + "while the others showed a recurring white blob and a subject changing colour, so check each take. VSA made it about 1.45x faster than dense on the whole clip. "
       + H3_AMD_NOTE,
     /* The same tiers as H3: under an 8 GB cap its DiT phase was within 50 MiB

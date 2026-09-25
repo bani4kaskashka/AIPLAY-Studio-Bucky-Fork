@@ -30,7 +30,7 @@ import { config } from "./config.js";
 import { qwenImageGraph, qwenImageSettings, QWEN_IMAGE_PRESET } from "./qwen-image.js";
 import { qwenImageStatus } from "./qwen-status.js";
 import { resolvePick } from "./modelpick.js";
-import { animaGraph, coverGraph, coverPrompt, COVER_NODES, ideogramGraph, ideogramPassSeeds, nextIdeogramSeed, isRefusalCard, ideogramRefusalMessage, checkpointGraph, zImageGraph, krea2Graph, videoGraph, videoPrompt, alignFrames, videoEngine, enhanceGraph, restyleGraph, h3SparseFor } from "./workflow.js";
+import { animaGraph, coverGraph, coverPrompt, COVER_NODES, ideogramGraph, ideogramPassSeeds, nextIdeogramSeed, isRefusalCard, ideogramRefusalMessage, checkpointGraph, zImageGraph, krea2Graph, videoGraph, videoPrompt, alignFrames, videoEngine, enhanceGraph, restyleGraph, h3SparseFor, h3BlockCacheFor } from "./workflow.js";
 /* An engine failure as a sentence, the raw text behind Details (the Video screen's). */
 import { plainVideoFailure } from "./video-plain.js";
 import { chosenAttention, vendorOf } from "./comfyargs.js";
@@ -684,6 +684,7 @@ export class ArtRunner extends EventEmitter {
        * launch flag), so what it offers is asked again, not remembered. */
       this.#ckOffered = undefined;
       this.#sparseOffered = undefined;
+      this.#cacheOffered = undefined;
       this.#lastQwen = null;
     });
   }
@@ -831,6 +832,34 @@ export class ArtRunner extends EventEmitter {
       + "ComfyUI's BlockSparseAttention in sol-attn mode, which this engine does not have (0.36 or newer has it).";
     return ok ? "sol-attn" : "off";
   }
+
+  /**
+   * H3's block cache for this job (h3tier.js H3_BLOCK_CACHE): true only when
+   * video_settings block_cache is on, the render would carry it (plain path,
+   * no sparse attention: workflow.js h3BlockCacheFor) and the engine has the
+   * custom node. Where it would and cannot, the job says so (blockCacheNote).
+   */
+  async videoBlockCache(job) {
+    const name = job.engine || config.video.engine;
+    const eng = { ...config.video, ...(config.video.engines[name] || {}), ...(job.models || {}) };
+    if (eng.blockCache !== true) return false;
+    /* The same answer the graph gets for sparse attention (asked, not guessed). */
+    const sparse = await this.videoSparse(job);
+    const refs = (Array.isArray(job.refImages) && job.refImages.some(Boolean))
+      || (Array.isArray(job.refAudios) && job.refAudios.some((a) => a && a.name));
+    const sparseCfg = h3SparseFor(eng, { steps: job.steps ?? eng.steps, refs, sparse,
+      continuation: !!job.continueFrom?.file, control: !!(job.controlVideo && job.controlPatch) });
+    if (!h3BlockCacheFor(eng, { blockCache: true, refs, continuation: !!job.continueFrom?.file,
+      control: !!(job.controlVideo && job.controlPatch), sparse: sparseCfg })) return false;
+    if (this.#cacheOffered === undefined) {
+      try { this.#cacheOffered = !!(await engineDoor.objectInfo(eng.blockCacheRecipe.node))?.[eng.blockCacheRecipe.node]; }
+      catch { this.#cacheOffered = false; }
+    }
+    if (!this.#cacheOffered) job.blockCacheNote = "This clip ran without the block cache: it needs the MiniMax H3 Block Cache (T8) "
+      + "custom node in ComfyUI, which this engine does not have.";
+    return this.#cacheOffered;
+  }
+  #cacheOffered;
 
   /** Idempotent, lazy, and never fatal — progress is a nicety, not the work. */
   #connect() {
@@ -1519,6 +1548,8 @@ export class ArtRunner extends EventEmitter {
               /* The sparse attention the graph carried, and why not where
                * sol-attn was asked for and the engine could not take it. */
               sparse: job.sparseRan ?? null, sparseNote: job.sparseNote || null,
+              /* Whether H3's block cache ran, and why not where it was asked for. */
+              blockCache: !!job.blockCacheRan, blockCacheNote: job.blockCacheNote || null,
               at: Date.now(),
             },
           });
@@ -2224,6 +2255,8 @@ export class ArtRunner extends EventEmitter {
        * engine was asked whether it has the node (videoSparse). Named here for
        * the reason the warning above gives. */
       sparse: await this.videoSparse(job),
+      /* H3's block cache, after the engine was asked for the node (videoBlockCache). */
+      blockCache: await this.videoBlockCache(job),
       // A clip under a song has that song's audio; a standalone one has nothing,
       // so H3's own audio is the only thing it could ever play.
       keepAudio: job.keepAudio ?? !job.file.startsWith("clip:"),
@@ -2237,6 +2270,7 @@ export class ArtRunner extends EventEmitter {
     /* Which sparse attention the graph really carries (node 81), for the
      * clip's metadata: sol-attn on H3's Fast setting, vsa on FastH3. */
     job.sparseRan = graph?.["81"]?.inputs?.selection || null;
+    job.blockCacheRan = graph?.["82"]?.class_type === config.video.engines.h3?.blockCacheRecipe?.node;
 
     // Generous: a clip is ~25 s warm but the first one after a music render pays
     // to load 29 GB of weights back in.

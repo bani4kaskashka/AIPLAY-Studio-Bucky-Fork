@@ -737,6 +737,19 @@ export const KNOBS = [
       + "(ComfyUI's Block Sparse Attention node). Higher is faster and softer. Unset, the lab's 1.3.",
     cite: DOCS.config,
   },
+  {
+    id: "block_cache",
+    label: "Block cache (experimental)",
+    applies: "h3",
+    kind: "bool", onValue: true, offValue: false,
+    path: ["video", "engines", "h3", "blockCache"],
+    /* h3tier.js H3_BLOCK_CACHE: the node, its recipe and what was measured. */
+    effect: "Skips most of H3's transformer blocks on steps where the picture barely changes (the MiniMax H3 "
+      + "Block Cache (T8) custom node, which must be installed in ComfyUI). Plain clips only, and never with sparse "
+      + "attention on. Its author measured 1.09x to 1.20x at 20 steps on NVIDIA; untested on the 3 to 8 step "
+      + "settings and on AMD: check the take.",
+    cite: DOCS.config,
+  },
 
   /* ── LTX, whose schedule IS its speed and is therefore worth showing ─────── */
   {
