@@ -55,6 +55,7 @@ import { gpuStatus, ramStatus, cpuStatus, gpuFirstReading, gpuReadOnce } from ".
 import { ArtRunner, COVER_DIR, LRC_DIR, CLIP_DIR, IMAGE_DIR, coverNameFor, videoSpeed } from "./art.js";
 import { jobStanding, ownFailure } from "./art-wait.js";
 import { whisperPythonMissing, pythonVerdict } from "./lrc.js";
+import { createWhisperRoutes } from "./whisper.js";
 import { probeClip, overlapFor, extensionFrames } from "./clipjoin.js";
 import { setSecret, clearSecret, secretStatus, protectionAvailable, getSecret, hasSecret } from "./secrets.js";
 import { createCloud } from "./llm/providers.js";
@@ -3060,6 +3061,14 @@ const promptToolRoutes = createPromptToolRoutes({
   }),
 });
 
+/* WHISPER AS A TOOL (server/whisper.js): transcribe or time any library song,
+ * clip or file in the output folder, through the art queue (kind "whisper")
+ * in the timed-lyrics python, and choose the model both use. */
+const whisperRoutes = createWhisperRoutes({
+  json, readBody, sameOriginLocalJson, art, config, probe: probeOne, modules: LYRICS_MODULES,
+  savePrefs, lrcDir: LRC_DIR, clipDir: CLIP_DIR,
+});
+
 /* THE ENGINE DOOR's public side. Same whole-prefix-plus-`handled` bargain as
  * vfx and the DAW, and it gets the same `rememberClip` closure every other clip
  * maker gets — so a render driven by a script or an agent lands in the clip
@@ -3236,6 +3245,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === "/api/gallery" || p === "/api/enhance") {
       if (await promptToolRoutes(req, res, url)) return;
+    }
+    if (p === "/api/whisper") {
+      if (await whisperRoutes(req, res, url)) return;
     }
 
     /* WHICH BUILD, AND IS THERE A NEWER ONE.

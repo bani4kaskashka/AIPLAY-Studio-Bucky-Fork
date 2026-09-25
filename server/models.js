@@ -2865,8 +2865,11 @@ export const CATALOG = [
   {
     id: "lyrics",
     home: "https://github.com/openai/whisper",   // faster-whisper fetches into its own cache
-    label: "Timed lyrics — Whisper large-v3",
-    why: "Produces word-level and line-level LRC files for visualisers.",
+    /* The id stays "lyrics" (tests, setup id and saved settings name it); the
+     * words say what it now is: Whisper for any transcription, and the timed
+     * lyrics that were once its only use (server/whisper.js). */
+    label: "Whisper: transcription and timed lyrics",
+    why: "Transcribes speech and songs, and times lyrics into LRC files.",
     licence: "MIT",
     outputRights: {
       class: "unrestricted",
@@ -2879,7 +2882,7 @@ export const CATALOG = [
     files: [],                 // fetched by faster-whisper into its own cache
     viaPackage: "faster_whisper",
     approxBytes: 3090000000,
-    note: "We already know the words, so this is alignment rather than transcription — the model supplies timing and the known lyrics supply the text. Measured 97.9% of words timed by direct match on a real track.",
+    note: "Transcribes any song, clip or file. With known lyrics it keeps your words and takes Whisper's timing. Measured 97.9% of words timed by direct match on a real track.",
     needsPackage: "faster_whisper",
     /* EVERY module server/lrc.py imports, by import name. `needsPackage` names
      * one, and probing only that one badged this row Ready in a fresh venv where
@@ -2897,9 +2900,12 @@ export const CATALOG = [
       note: "About 36 s for a 2.5-minute song at int8_float16. Line timing is reliable; word timing is approximate on sung vocals.",
     },
     variants: [
-      { label: "large-v3 (shipped)", bytes: 3090000000, note: "Best accuracy on sung vocals." },
-      { label: "medium", bytes: 1530000000, note: "Faster, more misheard words — reconciliation fixes the text, not the timing." },
+      { label: "large-v3 (default)", bytes: 3090000000, note: "Best accuracy on sung vocals." },
+      { label: "large-v3-turbo", bytes: 1620000000, note: "Much faster, close to large-v3 on speech." },
+      { label: "medium", bytes: 1530000000, note: "Faster, more misheard words. With known lyrics the text is fixed, not the timing." },
+      { label: "small", bytes: 484000000, note: "Fast; fine for clear speech." },
       { label: "base", bytes: 141000000, note: "Fast but unreliable on singing." },
+      { label: "tiny", bytes: 75000000, note: "Fastest; rough drafts of clear speech only." },
     ],
   },
   {

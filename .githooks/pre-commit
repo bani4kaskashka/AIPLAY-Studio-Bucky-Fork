@@ -802,6 +802,8 @@ node --test server/video-fail_test.js || exit 1
 # ungated. A suite outside the hook is a comment with a shebang.
 node --check web/modelfit.js || exit 1
 node server/modelfit_test.js || exit 1
+node --check web/modelsearch.js || exit 1
+node --test server/modelsearch_test.js || exit 1
 # THE TWO DOCUMENTS A STRANGER READS BEFORE TRUSTING ANY OF THIS. The model
 # tables in README.md and INSTALL.md are GENERATED from server/models.js, the
 # same bargain as NOTICE above — hand-kept, one listed 13 of 17 models and the
@@ -897,6 +899,11 @@ node server/art_cache_test.js || exit 1
 # server/ and scripts/ path off `import.meta.url).pathname`. The python half
 # skips only where no python runs at all.
 node server/lrc_test.js || exit 1
+# WHISPER AS A TOOL: /api/whisper and the whisper_* MCP tools. The door's
+# arguments and its output-folder guard, the "whisper" kind on the art queue
+# (a fake python, so no whisper and no GPU), the saved model, and whisper.py
+# against fake whisper modules. The python half skips where no python runs.
+node server/whisper_test.js || exit 1
 # ONE-CLICK TIMED LYRICS: [Set up timed lyrics] builds a private Python with the
 # kept uv (server/setup/venv.js). A fake uv (a Node script) records what it is
 # told: the CUDA 12.6 index on NVIDIA and the CPU index otherwise, the setting

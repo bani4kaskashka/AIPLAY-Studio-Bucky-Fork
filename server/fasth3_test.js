@@ -31,8 +31,10 @@ test("FastH3 is an engine after H3 and LTX, built on H3's parts", () => {
   /* The H3 lab (2026-09-24) timed FastH3 with Kitchen INT8; PyTorch was a
    * default nobody had measured. */
   assert.equal(f.attention, "kitchen", "Kitchen attention unless the render asks for PyTorch");
-  /* ...and it is an Advanced-only engine, with the lab's label and note. */
-  assert.equal(f.advanced?.label, "More motion (FastH3, experimental)");
+  /* ...named as the model it is, with the lab's caveat (an Advanced "More
+   * motion" switch until 2026-09-25). */
+  assert.equal(f.advanced?.label, "FastH3 (experimental)");
+  assert.doesNotMatch(f.advanced?.note || "", /motion/i, "no motion claim: its card makes none");
   assert.match(f.advanced?.note || "", /About 1\.4x the wait of Fast\. Can change the subject's colour or add a white blob; check the take\./);
 });
 

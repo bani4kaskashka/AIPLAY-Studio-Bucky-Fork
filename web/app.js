@@ -48,6 +48,8 @@ const picDrops = {};
 // the same answer models_for_this_machine gives an agent, from server/fit.js.
 import { paintFit, initFit } from "./modelfit.js";
 import { paintLocal, initLocal } from "./modellocal.js";
+// The Models screen's search, under "For this machine" (#video h3 and the like).
+import { paintSearch, searchModels, queryFor, modelName } from "./modelsearch.js";
 // The ⓘ in every screen's header (fork-only). One control, mounted once per
 // view by mountAllInfo() below, rendering /api/welcome's `screen_info` — the
 // screen's own paragraph and honest limit from the catalogue, joined against
@@ -697,6 +699,55 @@ function paintMusicModelSelect(sel) {
   if (document.activeElement !== sel && [...sel.options].some((o) => o.value === v)) sel.value = v;
   return true;
 }
+/* PRE-CONFIGURE MODELS: the top of the Models screen, one pick per job. Each
+ * row is the same choice as its own screen and is saved through that screen's
+ * own door (the Music picker's, /api/artconfig, /api/video, /api/chat/models,
+ * /api/whisper), so nothing here can disagree with the screen it names.
+ *
+ * A pick that is not installed is not saved: the select goes back to what is
+ * really chosen, and the search under "For this machine" is set to find the
+ * model (web/modelsearch.js searchModels), so the row with its download is on
+ * screen. A current pick whose files went missing shows "Find" beside it.
+ *
+ * `var`, not `const`: musicEnginePaint() calls the painter from early in boot. */
+var PRESET_IMAGE_CAP = { "qwen-image-2.1": "qwen-image-2.1", flux2: "coverArt", zimage: "imageZImage", "zimage-base": "imageZImageBase",
+  anima: "imageAnima", krea2: "imageKrea2", ideogram4: "imageIdeogram" };
+var PRESET_VIDEO_CAP = { ltx: "videoLtx", h3: "video", fasth3: "videoFastH3" };
+/* What the rows read that /api/models does not carry: the covers pick, the
+ * writing models and Whisper. Read when the screen paints, at most every 20 s,
+ * because the list repaints on every download tick. */
+var presetInfo = { at: 0, art: null, chat: null, whisper: null };
+function presetCap(id) { return (state.models?.capabilities || []).find((c) => c.id === id) || null; }
+/* A row this launch does not list (Music only) is not judged missing. */
+function presetReady(id) { const c = presetCap(id); return !c || !!c.ready; }
+
+async function loadPresetInfo(force = false) {
+  if (!force && Date.now() - presetInfo.at < 20000) return;
+  presetInfo.at = Date.now();
+  const get = (u) => fetch(u).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  const [art, chat, whisper] = await Promise.all([get("/api/artconfig"), get("/api/chat/models"), get("/api/whisper")]);
+  /* /api/whisper answers { whisper: { model, models, ready, ... } }. */
+  Object.assign(presetInfo, { art, chat, whisper: whisper?.whisper || null });
+  paintModelMusicPanel();
+}
+
+/** Point at a model that is not installed: search for it and say so. */
+function presetPoint(capId) {
+  const c = presetCap(capId);
+  const note = $("modelMusicNote");
+  if (!c) return;
+  const n = searchModels(queryFor(c), capId);
+  if (note) note.textContent = n ? `${modelName(c)} isn't installed. It's shown below.` : `${modelName(c)} isn't installed.`;
+}
+
+function presetOptions(sel, rows, current) {
+  const sig = JSON.stringify([rows, current]);
+  if (sel.dataset.sig === sig || document.activeElement === sel) return;
+  sel.innerHTML = rows.map((r) => `<option value="${esc(r.value)}"${r.off ? " disabled" : ""}>${esc(r.label + (r.missing ? " (not installed)" : ""))}</option>`).join("");
+  sel.dataset.sig = sig;
+  sel.value = current;
+}
+
 function paintModelMusicPanel() {
   const list = $("modelList");
   if (!list || !state.musicModels?.length) return;
@@ -705,17 +756,147 @@ function paintModelMusicPanel() {
     box = document.createElement("div");
     box.id = "modelMusic";
     box.className = "mmusic";
-    box.innerHTML = `<label class="flabel" for="modelMusicPick">Music model</label>
-      <select id="modelMusicPick" class="sel2"></select>
-      <span class="hint" id="modelMusicNote"></span>`;
+    const row = (id, label, find) => `<label for="${id}">${label}</label>
+      <span class="pv"><select id="${id}" class="sel2"></select><button type="button" class="edtool" data-mpfind="${find}" hidden>Find</button></span>`;
+    box.innerHTML = `<div class="mpchead"><h3>Pre-Configure Models</h3><span class="mfcount" id="modelPresetCount"></span></div>
+      <div class="params mpc">${row("modelMusicPick", "music", "music")}${row("mpImage", "pictures", "image")}${row("mpCover", "covers", "cover")}
+        ${row("mpVideo", "video", "video")}${row("mpChat", "writing", "chat")}${row("mpLyrics", "lyrics (Whisper)", "lyrics")}</div>
+      <span class="hint" id="modelMusicNote" role="status"></span>`;
     list.parentNode.insertBefore(box, $("modelFolder") || $("modelFit") || list);
-    $("modelMusicPick").onchange = () => chooseMusicModel($("modelMusicPick").value);
+    $("modelMusicPick").onchange = () => {
+      const c = (state.musicModels || []).find((x) => x.value === $("modelMusicPick").value);
+      /* Not installed and nothing to set up here: point at it instead of the
+       * model window, the same as every other row. */
+      if (c && !c.available && !c.api && c.engine !== "yue2-gguf") {
+        $("modelMusicPick").dataset.sig = "";
+        paintMusicModelSelect($("modelMusicPick"));
+        presetPoint(MUSIC_CAP[c.engine]);
+        return;
+      }
+      $("modelMusicNote").textContent = "";
+      chooseMusicModel($("modelMusicPick").value);
+    };
+    $("mpImage").onchange = () => presetPick("image", $("mpImage").value);
+    $("mpCover").onchange = () => presetPick("cover", $("mpCover").value);
+    $("mpVideo").onchange = () => presetPick("video", $("mpVideo").value);
+    $("mpChat").onchange = () => presetPick("chat", $("mpChat").value);
+    $("mpLyrics").onchange = () => presetPick("lyrics", $("mpLyrics").value);
+    box.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-mpfind]");
+      if (b?.dataset.cap) presetPoint(b.dataset.cap);
+    });
   }
+  const rows = presetRows();
   paintMusicModelSelect($("modelMusicPick"));
-  const ready = state.musicModels.filter((c) => c.available).length;
-  $("modelMusicNote").textContent = ready
-    ? `${ready} of ${state.musicModels.length} ready on this machine · the same choice as the Music tab`
-    : "No music model is ready yet — install one below.";
+  let shown = 0, ready = 0;
+  for (const key of ["music", "image", "cover", "video", "chat", "lyrics"]) {
+    const r = rows[key];
+    const sel = key === "music" ? $("modelMusicPick") : $({ image: "mpImage", cover: "mpCover", video: "mpVideo", chat: "mpChat", lyrics: "mpLyrics" }[key]);
+    const off = !r || (state.musicOnly && key !== "music");
+    sel.parentElement.hidden = off;
+    sel.parentElement.previousElementSibling.hidden = off;
+    if (off) continue;
+    if (key !== "music") presetOptions(sel, r.options, r.current);
+    const find = sel.nextElementSibling;
+    find.hidden = r.ok;
+    find.dataset.cap = r.cap || "";
+    shown++;
+    if (r.ok) ready++;
+  }
+  $("modelPresetCount").textContent = `${ready} of ${shown} ready`;
+}
+
+/** Each row's options, its current pick, whether that pick can run, and the
+ *  Models row that installs it. Null for a row with nothing to show yet. */
+function presetRows() {
+  const out = {};
+  const m = (state.musicModels || []).find((c) => c.value === musicModelValue());
+  out.music = { ok: !!m?.available, cap: MUSIC_CAP[m?.engine || state.musicEngine] || null };
+  /* Pictures and covers: the Images screen's own list, "Your own model file"
+   * left to that screen (it is picked per picture). */
+  const imgOpts = [...($("imgEngine")?.options || [])].filter((o) => o.value !== "checkpoint");
+  const imgRow = (current, cover) => {
+    const options = imgOpts.map((o) => ({ value: o.value, label: (cover && o.dataset.cover) || o.textContent,
+      missing: !presetReady(PRESET_IMAGE_CAP[o.value]) }));
+    if (current === "checkpoint") options.push({ value: "checkpoint", label: "Your own model file", off: true });
+    const cap = PRESET_IMAGE_CAP[current] || null;
+    return { options, current, cap, ok: current === "checkpoint" || presetReady(cap) };
+  };
+  out.image = imgOpts.length ? imgRow($("imgEngine").value, false) : null;
+  const artEngine = presetInfo.art?.engine;
+  out.cover = imgOpts.length && artEngine ? imgRow(artEngine, true) : null;
+  const engines = state.video?.engines || {};
+  const vcur = state.video?.engine;
+  out.video = Object.keys(engines).length && vcur ? {
+    options: Object.entries(engines).map(([k, e]) => ({ value: k, label: e.advanced?.label || e.label || k, missing: !presetReady(PRESET_VIDEO_CAP[k]) })),
+    current: vcur, cap: PRESET_VIDEO_CAP[vcur] || null, ok: presetReady(PRESET_VIDEO_CAP[vcur]),
+  } : null;
+  /* Writing: what can write, local and connected APIs (server/chat/models.js). */
+  const ch = presetInfo.chat;
+  if (ch) {
+    const models = Array.isArray(ch.models) ? ch.models : [];
+    out.chat = models.length
+      ? { options: models.map((x) => ({ value: x.file, label: x.label })), current: ch.current || models[0].file, cap: "chatQwen3", ok: true }
+      : { options: [{ value: "", label: ch.offline ? "waiting for the engine" : "none installed", off: true }], current: "", cap: "chatQwen3", ok: !!ch.offline };
+  }
+  /* Lyrics and speech: the Whisper model size, and whether Whisper can run. */
+  const w = presetInfo.whisper;
+  if (w && Array.isArray(w.models) && w.models.length) {
+    out.lyrics = { options: w.models.map((x) => (typeof x === "string" ? { value: x, label: x } : { value: x.value || x.id, label: x.label || x.value || x.id })),
+      current: w.model, cap: "lyrics", ok: w.ready !== false };
+  }
+  return out;
+}
+
+/** A pick from a row: saved where the row's own screen saves it. */
+async function presetPick(key, value) {
+  const rows = presetRows();
+  const r = rows[key];
+  const note = $("modelMusicNote");
+  const back = () => { const sel = $({ image: "mpImage", cover: "mpCover", video: "mpVideo", chat: "mpChat", lyrics: "mpLyrics" }[key]); sel.dataset.sig = ""; paintModelMusicPanel(); };
+  const post = async (url, body) => {
+    try {
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      return await res.json().catch(() => ({}));
+    } catch (e) { return { error: String(e?.message || e) }; }
+  };
+  note.textContent = "";
+  if (key === "image" || key === "cover") {
+    const cap = PRESET_IMAGE_CAP[value];
+    if (!presetReady(cap)) { back(); presetPoint(cap); return; }
+    const res = await post("/api/artconfig", key === "image" ? { imageEngine: value } : { engine: value, choose: true });
+    if (res.error) { note.textContent = res.error; back(); return; }
+    if (key === "image" && $("imgEngine")) { $("imgEngine").value = value; $("imgEngine").onchange?.(); }
+    if (key === "cover") {
+      presetInfo.art = { ...(presetInfo.art || {}), engine: res.engine || value };
+      if ($("artEngine")) { $("artEngine").value = res.engine || value; artEngineShape(); }
+    }
+  } else if (key === "video") {
+    /* Tried even when the row reads missing: the server also accepts an
+     * engine whose files are on disk under other names (workflow.js
+     * videoReady), and names the row to point at when it refuses. */
+    const res = await post("/api/video", { action: "engine", value });
+    if (res.error) {
+      back();
+      const id = typeof res.needsModel === "string" ? res.needsModel : res.needsModel?.id || res.capability || PRESET_VIDEO_CAP[value];
+      if (presetCap(id)) presetPoint(id); else note.textContent = res.error;
+      return;
+    }
+    state.video = { ...(state.video || {}), engine: value };
+    state.vidSizeFor = null;
+    vidPaint();
+  } else if (key === "chat") {
+    const res = await post("/api/chat/models", { model: value });
+    if (res.error) { note.textContent = res.error; back(); return; }
+    presetInfo.chat = { ...(presetInfo.chat || {}), current: value };
+    document.dispatchEvent(new Event("aiplay:llm-changed"));
+  } else if (key === "lyrics") {
+    const res = await post("/api/whisper", { action: "model", value });
+    if (res.error) { note.textContent = res.error; back(); return; }
+    presetInfo.whisper = res.whisper || { ...(presetInfo.whisper || {}), model: value };
+    if (r && !r.ok) presetPoint("lyrics");
+  }
+  paintModelMusicPanel();
 }
 async function chooseMusicModel(value) {
   const c = (state.musicModels || []).find((x) => x.value === value);
@@ -7502,6 +7683,9 @@ async function loadModels() {
   paintFit(d);
   paintLocal(d);
   paintModelMusicPanel();
+  loadPresetInfo();
+  /* The search under "For this machine", put back on the fresh rows. */
+  paintSearch(d, { getOpen: modelGroupsOpen });
   /* A [Set up …] button on the rows a one-click setup serves (web/setup-feature.js). */
   if (typeof paintSetupButtons === "function") paintSetupButtons($("modelList"), { refresh: loadModels });
 
@@ -7554,6 +7738,8 @@ function groupModelCards(d, htmls) {
 $("modelList").addEventListener("toggle", (e) => {
   const g = e.target;
   if (!g?.matches?.("details.mgroup")) return;
+  /* Opened or closed by a search (web/modelsearch.js), not by the person. */
+  if ($("modelList").dataset.searching) return;
   const open = modelGroupsOpen();
   if (g.open) open.add(g.dataset.mgroup);
   else open.delete(g.dataset.mgroup);
@@ -7711,18 +7897,14 @@ function vidPaint() {
   if (!state.vidEnginesPainted && Object.keys(engines).length) {
     state.vidEnginesPainted = true;
     vidModelShape();
-    /* An Advanced-only engine (FastH3, config `advanced`) goes by its Advanced
-     * label, "More motion (FastH3, experimental)". */
+    /* FastH3 (config `advanced`) goes by its label there, "FastH3 (experimental)":
+     * a model of its own, in the list since 2026-09-25 (it was an Advanced
+     * "More motion" switch). */
     const opts = Object.entries(engines)
       .map(([k, e]) => '<option value="' + esc(k) + '">' + esc(e.advanced?.label || e.label) + "</option>").join("");
     $("vidEngine").innerHTML = opts;
     $("qVideoEngine").innerHTML = opts;
   }
-  /* ...and it is not in the main list (the H3 lab, 2026-09-24): hidden there
-   * unless it is the saved choice, which keeps rendering on it and shows as
-   * selected. Its switch is Advanced's "More motion" (web/vidfit.js), which
-   * picks this same option. Settings' list keeps every engine. */
-  for (const o of $("vidEngine").options) o.hidden = !!engines[o.value]?.advanced && o.value !== cur;
   $("vidEngine").value = cur;
   $("qVideoEngine").value = cur;
 
@@ -20519,13 +20701,10 @@ function applyStatus(s) {
       row.hidden = !vready;
       if (!state.ovEnginePainted && s.config.video.engines) {
         state.ovEnginePainted = true;
-        /* An Advanced-only engine (FastH3) by its Advanced label, as on the
-         * Video screen... */
+        /* FastH3 by its label, "FastH3 (experimental)", as on the Video screen. */
         $("ovEngine").innerHTML = Object.entries(s.config.video.engines)
           .map(([k, e]) => '<option value="' + esc(k) + '">' + esc(e.advanced?.label || e.label) + "</option>").join("");
       }
-      /* ...and out of this list too unless it is the saved choice. */
-      for (const o of $("ovEngine").options) o.hidden = !!s.config.video.engines?.[o.value]?.advanced && o.value !== s.config.video.engine;
       $("ovEngine").value = s.config.video.engine;
     }
   }

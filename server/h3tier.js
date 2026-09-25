@@ -210,10 +210,15 @@ export const H3_SOL_ATTN = (() => {
   });
 })();
 
-/** FastH3's place: Advanced only (the lab's #4), in the owner's words. */
+/** FastH3's label and caveat wherever it is offered. The name is older than
+ *  the wording: it was an Advanced "More motion" switch until 2026-09-25.
+ *  FastH3 is a model of its own (FastVideo's 8-step distillation of H3), and
+ *  its card claims nothing about motion; the lab saw more camera motion on
+ *  three prompts, which is too few to name it by. So it is a choice in the
+ *  engine list, named as the model, with the measured caveat. */
 export const H3_MORE_MOTION = Object.freeze({
-  label: "More motion (FastH3, experimental)",
-  note: "More camera motion. About 1.4x the wait of Fast. Can change the subject's colour or add a white blob; "
+  label: "FastH3 (experimental)",
+  note: "A distilled H3 model, 8 steps. About 1.4x the wait of Fast. Can change the subject's colour or add a white blob; "
     + "check the take.",
   /* The lab ran FastH3 on text prompts only. Frames are accepted and said. */
   framesUntried: "FastH3 was only tried on text to video: an opening or closing picture is accepted, but not "

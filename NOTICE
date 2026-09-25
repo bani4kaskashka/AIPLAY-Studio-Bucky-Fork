@@ -400,7 +400,8 @@ in the app.
                             (UniRig LICENSE, VAST-AI-Research))
                             https://github.com/VAST-AI-Research/UniRig/blob/main/LICENSE
 
-    Whisper large-v3        MIT
+    Whisper: transcription and timed lyrics
+                            MIT
                             Output rights: yours (MIT License, grant paragraph
                             (openai/whisper LICENSE))
                             https://github.com/openai/whisper/blob/main/LICENSE

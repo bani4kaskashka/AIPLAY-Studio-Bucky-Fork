@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), "utf8").replace(/\r\n/g, "\n");
-const { clipNeedsCleanCard } = await import("./art.js");
+const { clipNeedsCleanCard, waitForQuietEngine } = await import("./art.js");
 const { config } = await import("./config.js");
 
 test("which clips start on a fresh engine", () => {
@@ -51,4 +51,28 @@ test("the setting is a Video Lab row, and says what was measured", () => {
   const cat = read("./videolab/catalog.js");
   assert.match(cat, /id: "free_before_clip",[\s\S]{0,120}kind: "enum", options: \["auto", "always", "never"\],\s*path: \["video", "freeBeforeClip"\],/);
   assert.match(cat, /unloading the models did not help, a restart did/);
+});
+
+/* Senzu's review (2026-09-25): the restart killed a song or an engine-door
+ * graph that was running at that moment. It waits for both now, and skips the
+ * restart rather than kill anything when the card never frees. */
+test("the restart waits for a running song and for the engine queue", async () => {
+  let t = 0;
+  const clock = { now: () => t, sleep: async (ms) => { t += ms; } };
+  let songUntil = 6000;
+  const quiet = await waitForQuietEngine({ ...clock, musicBusy: () => t < songUntil, engineQueue: async () => ({ queue_running: [], queue_pending: [] }) });
+  assert.equal(quiet, true);
+  assert.ok(t >= songUntil, "waited for the song");
+  t = 0;
+  const q = [["x"]];
+  const busyQ = await waitForQuietEngine({ ...clock, musicBusy: () => false, engineQueue: async () => ({ queue_running: t < 4000 ? q : [], queue_pending: t < 8000 ? q : [] }) });
+  assert.equal(busyQ, true);
+  assert.ok(t >= 8000, "pending counts too");
+  t = 0;
+  const never = await waitForQuietEngine({ ...clock, timeoutMs: 10000, musicBusy: () => true, engineQueue: async () => null });
+  assert.equal(never, false, "gives up rather than kill it");
+  t = 0;
+  assert.equal(await waitForQuietEngine({ ...clock, musicBusy: () => false, engineQueue: async () => { throw new Error("down"); } }), true, "an engine that does not answer has nothing to lose");
+  const art = read("./art.js");
+  assert.match(art, /const free = await waitForQuietEngine\(\{\s*musicBusy: \(\) => !!this\.jobs\?\.current,\s*engineQueue: \(\) => engineDoor\.queue\(\),\s*\}\);\s*if \(free\) \{/);
 });

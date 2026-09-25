@@ -964,6 +964,8 @@ export const config = {
 
   lyrics: {
     when: "off",
+    /* The whisper model for timed lyrics AND transcription (server/whisper.js),
+     * one of WHISPER_MODELS; saved when chosen (PREF_PATHS). */
     model: "large-v3",
     /* The interpreter a person chose in Settings > Songs (or with the
      * timed_lyrics_python tool), saved as prefs.lyrics.whisperPython; null when
@@ -2148,6 +2150,12 @@ const OK_WHEN = (v) => ["off", "all", "starred", "liked"].includes(v);
  * person chose, and dropping it at boot would silently put the default back. */
 const OK_PYTHON_PATH = (v) => v === null
   || (typeof v === "string" && v.length > 0 && v.length <= 1024 && !/[\r\n\0]/.test(v) && path.isAbsolute(v));
+/* The whisper models Studio offers (config.lyrics.model, POST /api/whisper
+ * {action:"model"}). Every one is a name faster-whisper's own table resolves
+ * to a converted checkpoint on huggingface.co (its utils.py _MODELS, which
+ * has had "large-v3-turbo" since 1.1), fetched on first use into its cache.
+ * large-v3 stays the default: it is the one measured on sung vocals. */
+export const WHISPER_MODELS = ["large-v3", "large-v3-turbo", "medium", "small", "base", "tiny"];
 config.music.engines["yue2-gguf"] = {
   label: "YuE2 GGUF · Q4 / Q8 · sellable by individuals",
   runtime: "audiocpp", capability: "musicYue2Gguf",
@@ -2218,6 +2226,7 @@ export const PREF_PATHS = [
   ["stems", "devicePython", OK_PYTHON_PATH],
   ["lyrics", "when", OK_WHEN],
   ["lyrics", "whisperPython", OK_PYTHON_PATH],
+  ["lyrics", "model", (v) => WHISPER_MODELS.includes(v)],
   ["output", "format", (v) => ["flac", "mp3", "opus"].includes(v)],
   ["output", "mp3Quality", (v) => ["V0", "128k", "320k"].includes(v)],
   ["output", "opusQuality", (v) => ["64k", "96k", "128k", "192k", "320k"].includes(v)],
