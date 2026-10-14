@@ -3,6 +3,8 @@ import { createWeightTransferRoutes } from './mesh/avatar-weight-transfer.js';
 import { createAvatarFittingRoutes } from './mesh/avatar-fitting.js';
 import { createStandRigRoutes } from './standrig/routes.js';
 import { lanConfig, createLanGate, lanAddresses } from './lan.js';
+import { createPages } from './pages.js';
+import { createVoiceRoute } from "./voice.js";
 import { createStandRigPsdRoutes } from './standrig/psd-export-routes.js';
 import {makeVideoRecipe,readVideoRecipe,describeVideoRecipe,videoRecipeMcpArgs} from "./collab/video-recipe.js";
 /**
@@ -74,7 +76,7 @@ import { gpuStatus, ramStatus, cpuStatus, gpuFirstReading, gpuReadOnce } from ".
 import { ArtRunner, COVER_DIR, LRC_DIR, CLIP_DIR, IMAGE_DIR, coverNameFor, videoSpeed, clipSpeedupNeeded, extendSteps } from "./art.js";
 import { jobStanding, ownFailure } from "./art-wait.js";
 import { whisperPythonMissing, pythonVerdict } from "./lrc.js";
-import { createWhisperRoutes } from "./whisper.js";
+import { createWhisperRoutes, whisperJob } from "./whisper.js";
 import { probeClip, overlapFor, extensionFrames } from "./clipjoin.js";
 import { setSecret, clearSecret, secretStatus, protectionAvailable, getSecret, hasSecret } from "./secrets.js";
 import { createCloud } from "./llm/providers.js";
@@ -3349,6 +3351,61 @@ const cloud = createCloud({
   usageFile: path.join(config.paths.appData, "llm-usage.json"),
 });
 const llmRoutes = createLlmRoutes({ json, readBody, cloud, config });
+/* My pages (server/pages.js): a person's own AI-built pages, kept in app data.
+ * Besides the API rows it offers the engine's own language models (the Chat
+ * menu's local rows), run through the engine door like any local job, and
+ * refused while a render holds the card. A page is long, so the budget is
+ * 12k tokens and 15 minutes rather than the chat's 700 and 4. */
+const pagesLocalModels = createChatModels({ engine: engineDoor, config, key: "pagesModel", fallbackKey: ["chatModel"], gpu: gpuStatus });
+const myPages = createPages({ dir: path.join(config.dataDir, "pages"), cloud, local: {
+  models: async () => {
+    const st = await pagesLocalModels.status().catch(() => null);
+    return st && !st.offline ? st.models : null;
+  },
+  complete: async (file, prompt) => {
+    const m = (await pagesLocalModels.list().catch(() => null))?.find((x) => x.file === file);
+    if (!m) throw new Error("The engine cannot load that model now. Start the engine, or pick another model.");
+    return createQwenModel({ engine: engineDoor, maxLength: 12000, timeoutMs: 900_000, resolve: async () => m })(prompt, { label: "my page" });
+  },
+  busy: async () => {
+    if (jobs.current) return `A song is rendering ("${jobs.current.title || "untitled"}").`;
+    if (art.current) return "A picture or clip is rendering.";
+    const door = await engineBusy(engineDoor).catch(() => null);
+    return door?.blocked ? door.why : null;
+  },
+} });
+
+/* Voice prompts (server/voice.js): the mic button in Chat and My pages. A
+ * recording, transcribed by the timed-lyrics whisper on the art queue (kind
+ * "whisper", so it never shares the card with a render), then deleted. */
+async function transcribeVoice(bytes, ext, actor) {
+  const noPython = whisperPythonMissing(config.lyrics.python);
+  if (noPython) throw Object.assign(new Error(noPython), { setup: process.env.AIPLAY_WHISPER_PYTHON ? null : "lyrics" });
+  const dir = path.join(config.paths.appData, "voice-prompts");
+  await mkdir(dir, { recursive: true });
+  const input = path.join(dir, `${randomUUID()}.${ext}`);
+  await writeFile(input, bytes);
+  try {
+    const job = art.request({
+      file: `whisper:${randomUUID().slice(0, 8)}`, title: "Voice prompt", kind: "whisper", asked: true, actor,
+      whisper: { input, vocals: null, lyrics: null, language: null, words: false, outStem: null },
+    });
+    if (!job) throw new Error(`Not queued: ${art.lastRefusal || "the queue refused it"}.`);
+    for (const end = Date.now() + 10 * 60_000; Date.now() < end;) {
+      const f = whisperJob(art, job.id);
+      if (f.state === "done") return String(f.job.transcript?.text || "").trim();
+      if (f.state !== "running" && f.state !== "queued") throw new Error(f.job?.error ? String(f.job.error) : "The transcription stopped.");
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    throw new Error("Whisper took longer than 10 minutes.");
+  } catch (e) {
+    /* The page gets the reason, not where the recording sat on this disk. */
+    throw Object.assign(new Error(String(e?.message || e).split(input).join("the recording").split(dir).join("Studio's data folder")), { setup: e?.setup });
+  } finally {
+    unlink(input).catch(() => {});
+  }
+}
+const voiceRoute = createVoiceRoute({ json, readBody, sameOriginLocalJson, transcribe: transcribeVoice });
 
 /* Comfy Router (the launcher's "Use Comfy API" mode): hosted models on the
  * user's own Comfy key and credits. Mounted only in that mode, so full Studio
@@ -3707,6 +3764,10 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/llm" || p === "/api/llm/models") {
       if (await llmRoutes(req, res, url)) return;
     }
+    if (p === "/api/pages" || p.startsWith("/api/pages/")) {
+      if (await myPages.handle(req, res, url, { json, readBody, sameOriginLocalJson })) return;
+    }
+    if (p === "/api/voice" && await voiceRoute(req, res, url)) return;
     if (routerRoutes && (p === "/api/router" || p.startsWith("/api/router/"))) {
       if (await routerRoutes(req, res, url)) return;
     }

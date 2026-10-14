@@ -29,6 +29,7 @@ import { dealStyleTags, GENRES } from "./style-tags.js";
 
 import { initStudio, studioRefresh } from "./studio.js";
 import { initGames } from "./games.js";
+import { initPages } from "./pages.js";
 import { initVfx, vfxOpen } from "./vfx.js";
 
 // Video Workflow (fork-only). See FORK_DELTA.md.
@@ -20433,6 +20434,7 @@ const INFO_HOSTS = {
   radio: "#radio",
   blog: "#blog",
   games: "#games",
+  mypages: "#mypages",
   models: "#models",
   engine: "#engine",
   settings: "#settings",
@@ -20570,11 +20572,13 @@ function setView(name, options) {
   $("mcp").hidden = name !== "mcp";
   $("about").hidden = name !== "about";
   $("games").hidden = name !== "games";
+  $("mypages").hidden = name !== "mypages";
   $("radio").hidden = name !== "radio";
   $("blog").hidden = name !== "blog";
   $("jobs").hidden = name !== "jobs";
   if (name === "jobs") paintJobs(state.lastStatus);
   if (name === "games") initGames();
+  if (name === "mypages") initPages();
   $("vfx").hidden = name !== "vfx";
   if (name === "vfx") { initVfx(); vfxOpen(); }
   if (name === "mcp") loadMcp();
