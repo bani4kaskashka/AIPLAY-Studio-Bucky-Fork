@@ -1,10 +1,16 @@
+import { prepareAceMusicInput, selectAceMusicModels, checkAceMusic } from './music/ace-comfy-input.js';
+import { createModelLibraryRoutes } from './model-library.js';
+import { MODEL_PROFILES } from '../shared/model-profiles.js';
+import { remoteAceShelf, remoteYueCheckpoints, preserveSelectedAce } from './engine/remote-models.js';
+import { setupPlan, selectionFor, localModelReadiness, profileGraph } from './setup-plan.js';
+import { validModelSelection, selectedAceDit } from '../shared/model-profiles.js';
 import {createBatchMusicBridge} from './batch-music-context.js';
 import { createWeightTransferRoutes } from './mesh/avatar-weight-transfer.js';
 import { createAvatarFittingRoutes } from './mesh/avatar-fitting.js';
 import { createStandRigRoutes } from './standrig/routes.js';
 import { lanConfig, createLanGate, lanAddresses } from './lan.js';
 import { createPages } from './pages.js';
-import { createVoiceRoute } from "./voice.js";
+import { createVoiceRoute, createVoiceTranscriber } from "./voice.js";
 import { createStandRigPsdRoutes } from './standrig/psd-export-routes.js';
 import {makeVideoRecipe,readVideoRecipe,describeVideoRecipe,videoRecipeMcpArgs} from "./collab/video-recipe.js";
 /**
@@ -26,6 +32,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
+import { readJSON as readCloudJSON, jsonStore as cloudJSONStore } from "./engine/remote-common.js";
 import { WebSocketServer } from "ws";
 import { config, PREF_PATHS, prefsSnapshot, loraStepsOf, whisperPython, defaultWhisperPython, prefChosen, prefOrigin, applyMachineDefault, forgetPref, overrideForSession, sessionOverride, LITERAL_DEFAULTS, refreshVideoPicks } from "./config.js";
 import { createVfxRoutes } from "./vfx/routes.js";
@@ -38,6 +45,7 @@ import { createSharedCueRoutes } from "./music/shared-cues.js";
 import { readProject as readDawPassageProject } from "./daw/store.js";
 import { compareArchivedTrainingPair } from "./music/train-archive.js";
 import { createDawRoutes } from "./daw/routes.js";
+import { createDawAssistantRoutes } from "./daw/assistant.js";
 /* The Video lab (FORK): compare one prompt across engine configurations, the
  * self-explaining quality selector, and the turbo toggles. Additive — it owns
  * /api/videolab and nothing else. */
@@ -47,7 +55,7 @@ import { createVideoLabRoutes } from "./videolab/routes.js";
 import { createDawLive } from "./daw/live.js";
 import { createEarRoutes } from "./daw/ear.js";
 import os from "node:os";
-import { deriveTitle, videoEngine, videoReady, resolveVideoEngine, enhanceCost, guideStrengths, ZIMAGE_PRESET, buildYue2ComfyGraph, yue2ComfySamplingReceipt, INSTRUMENTAL_PLANNER_LORA, buildAceStep15Graph, aceMeta, ACE_LANGUAGES, isGguf, GGUF_NODES, videoLoras } from "./workflow.js";
+import { deriveTitle, videoEngine, videoReady, resolveVideoEngine, enhanceCost, guideStrengths, ZIMAGE_PRESET, buildYue2ComfyGraph, yue2ComfySamplingReceipt, INSTRUMENTAL_PLANNER_LORA, buildAceStep15Graph, aceMeta, ACE_LANGUAGES, isGguf, GGUF_NODES, videoLoras, alignFrames } from "./workflow.js";
 import { ComfySupervisor, studioLaunchArgs } from "./comfy.js";
 import { hasAmdMusicFix, vendorOf } from "./comfyargs.js";
 /* THE ENGINE DOOR. `comfy` supervises the process; `engine` is the only thing
@@ -60,8 +68,12 @@ import { engine as engineDoor } from "./engine/client.js";
 import { qwenImageGraph, QWEN_IMAGE_PRESET, QWEN_DRAFT, QWEN_IMAGE_FILES, qwenImageSettings } from "./qwen-image.js";
 import { validateVideoLoras } from "./video-lora-validation.js";
 import { qwenImageStatus, stageQwenReferences, QWEN_IMAGE_ENGINE } from "./qwen-status.js";
+import { mossImageOptions, MOSS_IMAGE_ENGINE, MOSS_IMAGE_PRESET } from "./moss-image.js";
+import { mossImageStatus } from "./moss-status.js";
+import { mossGenerationProvenance } from "./moss-provenance.js";
 import { createEngineRoutes } from "./engine/routes.js";
 import { createH3RefModService, createH3RefModRoutes } from "./h3-refmod.js";
+import { createH3VideoControl, h3ControlOptions } from "./h3-video-control.js";
 import { stageRefModImage } from "./refmod-stage.js";
 import { validateYue2StyleAdapter, yue2StyleAdapterFor, yue2StyleAdapterFromProbe } from "./music/yue2-style-adapters.js";
 /* RunPod rendering (the launcher's "RunPod GPU" mode): the worker client, the
@@ -76,7 +88,7 @@ import { gpuStatus, ramStatus, cpuStatus, gpuFirstReading, gpuReadOnce } from ".
 import { ArtRunner, COVER_DIR, LRC_DIR, CLIP_DIR, IMAGE_DIR, coverNameFor, videoSpeed, clipSpeedupNeeded, extendSteps } from "./art.js";
 import { jobStanding, ownFailure } from "./art-wait.js";
 import { whisperPythonMissing, pythonVerdict } from "./lrc.js";
-import { createWhisperRoutes, whisperJob } from "./whisper.js";
+import { createWhisperRoutes } from "./whisper.js";
 import { probeClip, overlapFor, extensionFrames } from "./clipjoin.js";
 import { setSecret, clearSecret, secretStatus, protectionAvailable, getSecret, hasSecret } from "./secrets.js";
 import { createCloud } from "./llm/providers.js";
@@ -89,7 +101,10 @@ import { apiStatus, spendSummary, estimateUsd, PROVIDERS } from "./apiEngine.js"
 import { createCloudRoutes, hostedWouldBill, paidRefusal, HOSTED_KEY_PLACE, CLOUD_CARD_PLACE, localUiHost, LENDER_ROLE_LABEL } from "./cloud-switch.js";
 import { listCustom, CUSTOM_DIR, TOKENS, KINDS, assignedTo } from "./customWorkflows.js";
 import { stageLibrarySong, STAGED_SONG } from "./songstage.js";
-import { ModelManager, diskFree, CATALOG, MODEL_TO_CAPABILITY, modelLabel, modelPageUrl, engineFromModelFile, markRequired, modulesOf, songRights, songRightsStamp, isVideoRow } from "./models.js";
+import { ModelManager, diskFree, CATALOG, MODEL_TO_CAPABILITY, modelLabel, modelPageUrl, engineFromModelFile, markRequired, modulesOf, songRights, songRightsStamp, isVideoRow, musicCapabilityFor } from "./models.js";
+import { createLocalModelAccessRoutes } from './local-model-access.js';
+import { createHuggingFaceLogin } from './huggingface-login.js';
+import { createClipFavorites, createClipFavoriteFlagRoute, clipFavoriteFailure } from './clip-favorites.js';
 import { probeModel, loadableAs, presetFor, loraFits } from "./detect.js";
 import { listPickable, listVideoPickable, listParts, listVideoParts, resolvePick, isDitFolder, DIT_ENGINE, VIDEO_DIT_ENGINE } from "./modelpick.js";
 
@@ -177,7 +192,8 @@ async function checkedVideoLoras(value, engine) {
   const e = videoEngine(engine);
   return validateVideoLoras(value, {
     engine, loraBase: e.loraBase, label: e.label, shelf: async () => scanBases(await modelBases()), probe: probeModel,
-    automatic: [e.turboLora, e.turboLora4, e.turboLora3, e.refTurboLora, e.refTurboLora4].filter(Boolean),
+    automatic: [e.turboLora, e.turboLora4, e.turboLora3, e.refTurboLora, e.refTurboLora4]
+      .concat(e.automaticLoras ?? []).filter(Boolean),
   });
 }
 /* Qwen too, now: its files missing is the same "not installed" as any other
@@ -245,6 +261,7 @@ async function machineDefaults() {
   const music = defaultFor("music", {
     saved: prefChosen("music", "engine")
       ? { engine: swap ? swap.saved : config.music.engine,
+        dit: config.music.aceModel || null,
         checkpoint: prefChosen("music", "yue2Checkpoint") ? (ckptSwap ? ckptSwap.saved : config.music.yue2Checkpoint) : null,
         kept: prefOrigin("music", "engine") === "kept" }
       : null,
@@ -358,6 +375,7 @@ import { labelYueLyrics } from "./music/yue-lyrics.js";
 import { createEnginePackagesRunner } from "./setup/engine-packages.js";
 import { createQwenEngineRunner } from "./setup/qwen-engine.js";
 import { createQwenActivation } from "./setup/qwen-activation.js";
+import { createComfyMaintenance } from "./setup/comfy-maintenance.js";
 /* Read through the namespace, not by name: engineModuleRefusal (lane D) is
  * called only when the module carries it, so this file loads either way. */
 import * as enginePackages from "./setup/engine-packages.js";
@@ -440,7 +458,7 @@ import * as configLib from "./config.js";
 import { seedScore } from "./music/seed.js";
 import { appVersion, versionLine } from "./version.js";
 import { checkUpdates, lastCheck, updateSentence } from "./updates.js";
-import { BatteryGuard, watchPower } from "./power.js";
+import { BatteryGuard, PowerMonitor, batterySafeEnabled } from "./power.js";
 /* THE MINORS RULE (docs/SAFETY.md): sexual content involving minors is refused
  * at every door, whatever the model, the agent or the setting. */
 import { onRefusal, safetyRefusal, assertSafe, bodyOfError } from "./safety/refusal.js";
@@ -543,7 +561,7 @@ async function renderMediaForBatch(kind, item, take, actor) {
         engine: item.engine, checkpoint: item.checkpoint, negative: item.negative,
         width: item.width, height: item.height, steps: item.steps,
         cfg: item.cfg, count: item.count,
-        dit: item.dit, ditEngine: item.ditEngine, encoder: item.encoder, vae: item.vae,
+        dit: item.dit, ditEngine: item.ditEngine, encoder: item.encoder, vae: item.vae, mossPreset: item.mossPreset,
         quality: item.quality, persona: item.persona, refImages: item.refImages,
         refSizing: item.refSizing, refResolution: item.refResolution, transparent: item.transparent,
         draft: item.draft,
@@ -581,7 +599,11 @@ const batch = new BatchRunner(jobs, {
 });
 // Draws covers only while the music queue is empty — see art.js for why that is
 // a hard requirement rather than politeness.
-const art = new ArtRunner(comfy, jobs);
+const videoControlService = createH3VideoControl({ clipDir: CLIP_DIR, inputDir: config.inputDir,
+  outputDir: config.outputDir, engine: engineDoor, catalog: CATALOG, modelConfig: config });
+const videoControlFailure = (error) => ({ error: error.reason ? error.message : "Video control could not be checked. Verify the source video and local engine, then try again.", reason: error.reason || "control-video",
+  ...(error.needsModel ? { needsModel: error.needsModel } : {}), ...(error.needsNodes ? { needsNodes: error.needsNodes } : {}) });
+const art = new ArtRunner(comfy, jobs, { videoControl: videoControlService });
 /* THE PLAN RUNNERS, the third queue the fresh-engine restart waits for
  * (art.js otherWorkOnEngine): an overnight run in the middle of a step that is
  * not a picture or clip it is waiting on (a music step, or between two), or a
@@ -676,6 +698,8 @@ async function embedCover(file, coverName) {
     seed: m.seed, mixSeed: m.mixSeed, steps: m.steps,
     cfg: m.cfg, shift: config.sampling.shift,
     model: m.model || "int8",
+    ...(m.engine === 'ace-step15' ? { precision: m.acePrecision ?? null, dit: m.aceDit, lm: m.aceLm,
+      trackChecksums: true, executionTarget: m.executionTarget } : {}),
     date: new Date(m.createdAt || Date.now()).toISOString().slice(0, 10),
     // The re-tag must not drop the marker or the record the first pass wrote.
     ...(await songProvMeta(file)),
@@ -786,6 +810,7 @@ art.on("cover", ({ file, covers, seed, imageOptions, durationMs, engine, checkpo
               checkpoint: checkpoint ?? null,
               seed: seed ?? null,
               runId: runId ?? null,
+              ...mossGenerationProvenance(engine, imageOptions),
               /* FAST DRAFT, said in the ledger as well as on the row: the same
                * model with Viggle's turbo LoRA on it. Only on a draft, so every
                * other line keeps the shape the chain already has. */
@@ -888,7 +913,9 @@ art.on("clip", ({ file, clip, seconds, meta, runId }) => {
       data: { model: meta?.engine || config.video.engine || null,
               for: file.startsWith("clip:") ? null : file,
               seed: meta?.seed ?? null,
-              derivedFrom: meta?.extendedFrom ? `clips/${meta.extendedFrom}` : null,
+              derivedFrom: meta?.videoControl?.source?.name ? `clips/${meta.videoControl.source.name}`
+                : meta?.extendedFrom ? `clips/${meta.extendedFrom}` : null,
+              videoControl: meta?.videoControl || null,
               op: meta?.extendedFrom ? "extend" : null,
               runId: runId ?? null },
     });
@@ -1254,6 +1281,8 @@ async function documentSources(id) {
  * provenance of old clips, never the ability to start the app.
  */
 const CLIP_STORE = path.join(config.paths.appData, "clips.json");
+const clipFavorites = createClipFavorites({ file:path.join(config.paths.appData,'clip-favorites.json'), clipDir:CLIP_DIR });
+const clipFavoriteFlagRoute = createClipFavoriteFlagRoute({ favorites:clipFavorites, json, sameOriginLocalJson });
 let clipStoreTimer = null;
 
 async function loadClipStore() {
@@ -1747,7 +1776,7 @@ jobs.on("update", async (snap) => {
     provNote("library", {
       actor, type: "generate", asset: h.file,
       data: {
-        model: modelName, modelVersion: (isYue || isYueComfy) ? "3B" : (job.model || "int8"),
+        model: modelName, modelVersion: isAce ? job.acePrecision ?? null : (isYue || isYueComfy) ? "3B" : (job.model || "int8"),
         promptHash: `sha256:${prov.sha256hex(`${job.caption || ""}\n${job.lyrics || ""}`)}`,
         seed: h.seed, mixSeed: h.mixSeed ?? null,
         /* The parameters that changed WHICH ARITHMETIC made the song: for
@@ -1755,9 +1784,10 @@ jobs.on("update", async (snap) => {
          * precision, all of which the door's own ledger row (song/<runId>)
          * carries in full — this is the join to it. */
         params: isAce
-          ? { runtime: "comfy", dit: job.aceDit, lm: job.aceLm, bpm: job.bpm, keyscale: job.keyscale,
+          ? { runtime: "comfy", dit: job.aceDit, lm: job.aceLm, precision: job.acePrecision ?? null, bpm: job.bpm, keyscale: job.keyscale,
               timesignature: job.timesignature, metaFrom: job.aceMetaFrom || null, language: job.language,
               steps: job.aceSteps ?? null, cfg: job.aceCfg ?? null, planner: !!job.aceCodes,
+              plannerTemperature: job.acePlanTemp ?? null, hardwareReference: job.aceHardwareEvidenceId || null,
               lora: job.lora || null, loraStrength: job.lora ? (job.loraStrength ?? 1) : null,
               cover: job.aceCover || null, seconds: job.maxDuration ?? null }
           : isGguf
@@ -1804,14 +1834,15 @@ jobs.on("update", async (snap) => {
      * MiniMax value is a precision (int8/fp16/fp32) because that engine has
      * one weight file per precision. YuE2's 32 is the NAR's ODE step count,
      * the number the vendor's own protocol fixes. */
-    steps: (isYue || isYueComfy) ? (job.narSteps || 32) : h.steps,
-    cfg: isYue ? (job.cfgScale ?? null) : isYueComfy ? 1 : job.cfg,
+    steps: isAce ? job.aceSteps : (isYue || isYueComfy) ? (job.narSteps || 32) : h.steps,
+    cfg: isAce ? job.aceCfg : isYue ? (job.cfgScale ?? null) : isYueComfy ? 1 : job.cfg,
     model: isGguf ? (job.quantization === "q8_0" ? "YuE2 GGUF Q8" : "YuE2 GGUF Q4")
       : isYueComfy ? "YuE2 3B (ComfyUI)" : isYue ? "YuE2 3B"
       : isAce ? `ACE-Step 1.5 ${aceBuildName(job.aceDit)}`
       : job.viaApi ? "MiniMax Music 3 (API)" : job.model,
     ...(job.viaApi ? { viaApi: true, costUsd: job.costUsd ?? null } : {}),
     engine: job.engine || "minimax-music3",
+    executionTarget: job.remote ? 'runpod' : job.viaApi ? 'api' : 'local',
     ...(isGguf ? {
       warnings: job.warnings || [], generationLimits: job.generationLimits ?? null,
     } : {}),
@@ -1829,7 +1860,9 @@ jobs.on("update", async (snap) => {
       rights: songRights({ engine: job.engine, tokenized: job.tokenized || null }).label,
     } : {}),
     ...(isAce ? {
-      aceDit: job.aceDit || null, bpm: job.bpm, keyscale: job.keyscale, timesignature: job.timesignature,
+      aceDit: job.aceDit || null, acePrecision: job.acePrecision ?? null, bpm: job.bpm, keyscale: job.keyscale, timesignature: job.timesignature,
+      aceLm: job.aceLm, aceCodes: job.aceCodes, acePlanTemp: job.acePlanTemp, maxDuration: job.maxDuration,
+      aceHardwareEvidenceId: job.aceHardwareEvidenceId || null,
       language: job.language, lora: job.lora || null, loraStrength: job.lora ? (job.loraStrength ?? 1) : null,
       coverOf: job.aceCover || null,
     } : {}),
@@ -1882,6 +1915,8 @@ jobs.on("update", async (snap) => {
     const meta = isAce
       ? {
         title: h.title, caption: job.caption, lyrics: job.lyrics, seed: h.seed, mixSeed: h.mixSeed,
+        steps: job.aceSteps, cfg: job.aceCfg, precision: job.acePrecision ?? null,
+        dit: job.aceDit, lm: job.aceLm, trackChecksums: true, executionTarget: job.remote ? 'runpod' : 'local',
         bpm: job.bpm, key: job.keyscale, timesignature: job.timesignature, language: job.language,
         ...(job.lora ? { lora: `${job.lora} @ ${job.loraStrength ?? 1}` } : {}),
         model: modelName, date: new Date().toISOString().slice(0, 10),
@@ -2115,6 +2150,10 @@ const ACE_DIT = /^acestep[_-]?v?1\.?5.*\.(safetensors|sft)$/i;
 const ACE_LMS = ["qwen_4b_ace15.safetensors", "qwen_1.7b_ace15.safetensors"];
 const aceBuildName = (n) => modelLeaf(n).replace(/\.(safetensors|sft)$/i, "").replace(/^acestep[_-]?v?1\.?5[_-]?/i, "").replace(/_/g, " ") || String(n || "");
 async function aceShelf() {
+  if (config.remoteOnly) {
+    try { return remoteAceShelf(await (await remoteRoutes.start()).models(), config.music.aceLm); }
+    catch { return { dits: [], vae: false, enc: false, lms: [], lm: null, ready: false, missing: 'Connect your RunPod AI service to discover its ACE models' }; }
+  }
   const shelf = await scanBases(await modelBases());
   const on = (folders, name) => {
     try { return findShelfModel(shelf, folders[0], name); }
@@ -2216,7 +2255,7 @@ async function musicModelChoices(cat) {
       });
     }
   }
-  if (config.music.engines["ace-step15"] && !config.musicOnly) {
+  if (config.music.engines["ace-step15"] && !config.musicOnly && !config.remoteOnly) {
     const ace = await aceShelf();
     for (const dit of ace.dits) {
       out.push({
@@ -2244,11 +2283,30 @@ async function musicModelChoices(cat) {
    * against its own files and names any that are missing. Native GGUF and the
    * Python kit still run here and keep their own answer. */
   if (config.remoteOnly) {
+    for (let i = out.length - 1; i >= 0; i--) if (['ace-step15', 'yue2-comfy'].includes(out[i].engine)) out.splice(i, 1);
+    let info = null;
+    try { info = await (await remoteRoutes.start()).models(); } catch {}
+    const ace = config.music.engines["ace-step15"] ? remoteAceShelf(info, config.music.aceLm) : { dits: [] };
+    for (const dit of ace.dits) out.push({ value: 'ace-step15:' + dit, engine: 'ace-step15', precision: null, dit,
+      label: 'ACE-Step 1.5 · ' + aceBuildName(dit) + ' · RunPod', available: ace.ready,
+      note: ace.ready ? 'RunPod files available; inference unverified' : ace.missing, lms: ace.lms, lm: ace.lm });
+    if (config.music.engines["ace-step15"] && !ace.dits.length) out.push({ value: 'ace-step15', engine: 'ace-step15', label: 'ACE-Step 1.5 · RunPod', available: false, note: 'Connect and install ACE on your RunPod' });
+    const checkpoints = config.music.engines["yue2-comfy"] ? remoteYueCheckpoints(info) : [];
+    for (const checkpoint of checkpoints) out.push({ value: 'yue2-comfy:' + checkpoint, engine: 'yue2-comfy', checkpoint,
+      label: 'YuE2 · ' + bareName(checkpoint) + ' · RunPod', available: true, note: 'Runs on RunPod; runtime validated when submitted' });
+    if (config.music.engines["yue2-comfy"] && !checkpoints.length) out.push({ value: 'yue2-comfy', engine: 'yue2-comfy', label: 'YuE2 · RunPod', available: false, note: 'Connect and install YuE2 on your RunPod' });
     for (const c of out) {
-      if (c.api || !["minimax-music3", "ace-step15", "yue2-comfy"].includes(c.engine)) continue;
-      c.available = true;
-      c.note = "on your RunPod";
+      if (c.api || c.engine !== 'minimax-music3') continue;
+      // Preserve the existing remote MiniMax path; submission validates its graph.
+      c.available = true; c.note = 'Runs on RunPod; checked when submitted';
     }
+    for (const c of out) if (['yue2', 'yue2-gguf'].includes(c.engine)) c.label += ' · Local';
+  } else for (const c of out) if (!c.api) c.note = [c.note, 'Runs on this PC'].filter(Boolean).join(' · ');
+  if (!config.musicOnly && !config.cloudOnly && config.music.engines['ace-step15']) preserveSelectedAce(out, config.music.aceModel);
+  for (const c of out) if (c.engine === 'ace-step15') {
+    const profile = MODEL_PROFILES.find(p => p.settings?.dit === c.dit);
+    c.hardwareAcceptance = profile?.hardwareAcceptance || null; c.capability = profile?.capability;
+    c.shortLabel = profile?.label.split(' (')[0];
   }
   musicChoicesCache = { at: Date.now(), value: out };
   return out;
@@ -2325,8 +2383,10 @@ async function savePrefs() {
     await mkdir(path.dirname(config.settingsFile), { recursive: true });
     await writeFile(config.settingsFile,
       JSON.stringify({ ...cur, prefs: prefsSnapshot() }, null, 2), "utf-8");
+    return true;
   } catch (err) {
     console.warn(`  [settings] could not be saved: ${err.message}`);
+    return false;
   }
 }
 
@@ -2699,6 +2759,8 @@ const peakCache = new Map();
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
+  ".pdf": "application/pdf",
+  ".md": "text/plain; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".svg": "image/svg+xml",
@@ -3043,6 +3105,7 @@ const vfxRoutes = createVfxRoutes({
  * so an unknown /api/daw path still falls through to the app's own 404.
  * [DAWREC] provenance rides in so recorded takes land as `record` events. */
 const dawRoutes = createDawRoutes({ json, readBody, config, provenance: prov });
+const dawAssistantRoutes = createDawAssistantRoutes({ config });
 const sharedCueRoutes = createSharedCueRoutes({ json, readBody, renderAccent: dawRoutes.renderCueAccent });
 const scoreRoutes = createScoreRoutes({ json, readBody, config, provenance: prov });
 const communityRoutes = createCommunityRoutes({ json, readBody, library, jobs, engine: engineDoor, provenance: prov,
@@ -3112,6 +3175,12 @@ async function qwenRepairBusy() {
 }
 const qwenActivation = createQwenActivation({ config, supervisor: comfy, engine: engineDoor,
   readiness: () => qwenImageStatus(), busy: qwenRepairBusy });
+const comfyMaintenance = createComfyMaintenance({ config, engine: engineDoor, supervisor: comfy,
+  busy: qwenRepairBusy,
+  vendor: () => config.torchBackend === "cpu" ? "cpu"
+    : vendorOf(config.gpu, config.torchBackend) || gpuStatus()?.vendor || "cpu",
+  gpuName: () => gpuStatus()?.name || config.gpu?.name || "",
+});
 const setupRunner = oneRunner(createSetupRunner({
   appData: config.dataDir,
   vendor: () => gpuStatus()?.vendor || vendorOf(config.gpu, config.torchBackend),
@@ -3156,8 +3225,18 @@ const setupRunner = oneRunner(createSetupRunner({
       ? "This engine is selected by a launch override. Remove that override to let Studio fix Qwen."
       : null,
   activate: (metadata) => qwenActivation.activate(metadata),
-}));
+}), comfyMaintenance.runner);
 const setupRoutes = createSetupRoutes({ json, readBody, sameOriginLocalJson, runner: setupRunner });
+const modelAccessSecrets = { get:getSecret, set:setSecret, clear:clearSecret, status:secretStatus };
+const huggingFaceLogin = createHuggingFaceLogin({ secrets:modelAccessSecrets });
+const localModelAccessRoutes = createLocalModelAccessRoutes({ json, readBody, sameOriginLocalJson, models,
+  secrets:modelAccessSecrets, login:huggingFaceLogin, modelsDir:() => config.modelsDir,
+  diskFree, uiPort:config.uiPort, enabled:() => !config.remoteOnly && !config.cloudOnly && !config.musicOnly });
+const modelLibraryRoutes = createModelLibraryRoutes({config,json,readBody,sameOriginLocalJson,getSecret,setSecret,clearSecret,
+  localFiles:async()=>scanBases(await modelBases()),
+  localMachine:()=>readMachine(gpuStatus(),ramStatus(),{cpuOnly:cpuOnlyEngine(),vaeMeasured:h3VaeMeasured()}),
+  localObjects:()=>config.remoteOnly ? Promise.resolve(null) : engineDoor.objectInfo(),
+  busy:()=>!!(jobs.current || jobs.queue.length || art.status().art?.current || [...models.progress.values()].some(p=>p.state==='downloading')) });
 /* Fast covers (server/fastcover.js): song covers on the processor. The art
  * queue asks use() for every song cover it queues. */
 const fastCovers = createFastCovers({ config, catalog: CATALOG, models, setup: setupRunner, save: () => savePrefs() });
@@ -3378,33 +3457,13 @@ const myPages = createPages({ dir: path.join(config.dataDir, "pages"), cloud, lo
 /* Voice prompts (server/voice.js): the mic button in Chat and My pages. A
  * recording, transcribed by the timed-lyrics whisper on the art queue (kind
  * "whisper", so it never shares the card with a render), then deleted. */
-async function transcribeVoice(bytes, ext, actor) {
-  const noPython = whisperPythonMissing(config.lyrics.python);
-  if (noPython) throw Object.assign(new Error(noPython), { setup: process.env.AIPLAY_WHISPER_PYTHON ? null : "lyrics" });
-  const dir = path.join(config.paths.appData, "voice-prompts");
-  await mkdir(dir, { recursive: true });
-  const input = path.join(dir, `${randomUUID()}.${ext}`);
-  await writeFile(input, bytes);
-  try {
-    const job = art.request({
-      file: `whisper:${randomUUID().slice(0, 8)}`, title: "Voice prompt", kind: "whisper", asked: true, actor,
-      whisper: { input, vocals: null, lyrics: null, language: null, words: false, outStem: null },
-    });
-    if (!job) throw new Error(`Not queued: ${art.lastRefusal || "the queue refused it"}.`);
-    for (const end = Date.now() + 10 * 60_000; Date.now() < end;) {
-      const f = whisperJob(art, job.id);
-      if (f.state === "done") return String(f.job.transcript?.text || "").trim();
-      if (f.state !== "running" && f.state !== "queued") throw new Error(f.job?.error ? String(f.job.error) : "The transcription stopped.");
-      await new Promise((r) => setTimeout(r, 400));
-    }
-    throw new Error("Whisper took longer than 10 minutes.");
-  } catch (e) {
-    /* The page gets the reason, not where the recording sat on this disk. */
-    throw Object.assign(new Error(String(e?.message || e).split(input).join("the recording").split(dir).join("Studio's data folder")), { setup: e?.setup });
-  } finally {
-    unlink(input).catch(() => {});
-  }
-}
+const transcribeVoice = createVoiceTranscriber({
+  art, dir: path.join(config.paths.appData, "voice-prompts"),
+  checkSetup: () => {
+    const noPython = whisperPythonMissing(config.lyrics.python);
+    if (noPython) throw Object.assign(new Error(noPython), { setup: process.env.AIPLAY_WHISPER_PYTHON ? null : "lyrics" });
+  },
+});
 const voiceRoute = createVoiceRoute({ json, readBody, sameOriginLocalJson, transcribe: transcribeVoice });
 
 /* Comfy Router (the launcher's "Use Comfy API" mode): hosted models on the
@@ -3510,6 +3569,7 @@ const whisperRoutes = createWhisperRoutes({
  * responses by server/engine/client_test.js. */
 const engineRoutes = createEngineRoutes({
   json, readBody, config, provenance: prov, engine: engineDoor, comfy,
+  maintenance: comfyMaintenance, sameOriginLocalJson,
   IMAGE_DIR, CLIP_DIR,
   rememberClip: (name, renderSeconds, meta) => {
     if (!name) return;
@@ -3536,8 +3596,37 @@ engineDoor.setAdopter(engineRoutes.adopt);
  * routes: /api/runpod answers there with a refusal naming the mode. Results
  * are adopted into the same library as a local render; audio goes to the
  * music library under a runpod- name. */
-const remoteRoutes = config.remoteOnly ? createRemoteRoutes({ config, getSecret, setSecret, clearSecret,
+const cloudQueueFile = path.join(config.dataDir, "runpod", "paused-music-queue.json");
+const cloudQueueSave = cloudJSONStore(cloudQueueFile);
+let cloudQueueSignature = null;
+const savePausedCloudQueue = async () => {
+  const signature = JSON.stringify(jobs.queue);
+  if (signature === cloudQueueSignature) return;
+  await cloudQueueSave({ jobs: JSON.parse(signature) }); cloudQueueSignature = signature;
+};
+jobs.on("update", () => {
+  if (config.remoteOnly && jobs.cloudQueuePaused) savePausedCloudQueue().catch(() => console.warn("  [cloud] The paused queue could not be saved."));
+});
+const remoteRoutes = config.remoteOnly ? createRemoteRoutes({ config, getSecret, setSecret, clearSecret, savePrefs,
   append: prov.append, actorFrom: prov.actorFrom, sameOriginLocalJson,
+  localActivity: () => ({ active: !!jobs.current, queued: jobs.cloudQueuePaused ? 0 : jobs.queue.length }),
+  pauseQueuedWork: async () => {
+    jobs.pauseCloudQueue();
+    cloudQueueSignature = null; await savePausedCloudQueue();
+  },
+  resumeQueuedWork: async () => {
+    const file = cloudQueueFile;
+    const saved = await readCloudJSON(file, { jobs: [] });
+    const known = new Set([...jobs.queue, ...jobs.history, ...(jobs.current ? [jobs.current] : [])].map(j => j.id));
+    for (const job of saved.jobs || []) if (typeof job.id === "string" && !known.has(job.id)) { jobs.queue.push({ ...job, state: "queued" }); known.add(job.id); }
+    await cloudQueueSave({ jobs: [] }); cloudQueueSignature = null; jobs.resumeCloudQueue();
+  },
+  setSchedulingBlocked: value => { jobs.cloudStopping = !!value; },
+  cancelLocal: async () => {
+    for (const job of [...jobs.queue]) await jobs.cancelById(job.id);
+    if (jobs.current) await jobs.cancel();
+    if (jobs.cloudQueuePaused) { cloudQueueSignature = null; await savePausedCloudQueue(); }
+  },
   adopt: async (details) => {
     if (/\.(wav|flac|mp3|ogg|opus)$/i.test(details.output.file)) {
       /* "aiplay_" first: the library lists only its own prefixes (library.js
@@ -3562,7 +3651,7 @@ if (remoteRoutes) jobs.setRemote(async ({ graph, label, actor, isCancelled, onSt
     error.remoteState = "cancelled";
     throw error;
   }
-  const sent = await c.submit({ graph, bindings: [], label: `AIPLAY music · ${label || "song"}`, actor });
+  const sent = await c.submit({ graph, bindings: [], label: `AIPLAY music · ${label || "song"}`, actor, fromQueue: true });
   return await awaitRemoteMusicJob({ client: c, sent, isCancelled, onState });
 });
 
@@ -3626,6 +3715,7 @@ const server = http.createServer(async (req, res) => {
   }
   const url = new URL(req.url, "http://localhost");
   const p = url.pathname;
+  if (await modelLibraryRoutes(req,res,url)) return;
 
   try {
     if (p === "/api/runpod" || p.startsWith("/api/runpod/")) {
@@ -3735,6 +3825,10 @@ const server = http.createServer(async (req, res) => {
       if (await vfxRoutes(req, res, url)) return;
     }
 
+    if (p.startsWith("/api/daw-assistant/")) {
+      if (await dawAssistantRoutes(req, res, url)) return;
+    }
+
     if (p === "/api/daw/ear" || p.startsWith("/api/daw/ear/")) {
       if (await earRoutes(req, res, url)) return;
     }
@@ -3767,6 +3861,7 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/pages" || p.startsWith("/api/pages/")) {
       if (await myPages.handle(req, res, url, { json, readBody, sameOriginLocalJson })) return;
     }
+    if ((p === '/api/models/access' || p === '/api/models/access/callback') && await localModelAccessRoutes(req, res, url)) return;
     if (p === "/api/voice" && await voiceRoute(req, res, url)) return;
     if (routerRoutes && (p === "/api/router" || p.startsWith("/api/router/"))) {
       if (await routerRoutes(req, res, url)) return;
@@ -3850,6 +3945,7 @@ const server = http.createServer(async (req, res) => {
           musicYue2LoraStrength: config.music.yue2LoraStrength,
           musicYue2LoraClip: config.music.yue2LoraClip,
           musicYue2LoraClipStrength: config.music.yue2LoraClipStrength,
+          musicComputer: config.remoteOnly ? await remoteRoutes.musicState() : null,
           musicAceModel: config.music.aceModel,
           musicAceLm: config.music.aceLm,
           musicAceLora: config.music.aceLora,
@@ -4016,7 +4112,7 @@ const server = http.createServer(async (req, res) => {
                * LoRA picker leaves them out, because stacking one again would
                * apply it twice. */
               ownLoras: [e.turboLora, e.turboLora4, e.turboLora3, e.refTurboLora, e.refTurboLora4]
-                .filter(Boolean).map((n) => requireModelName(n)),
+                .concat(e.automaticLoras ?? []).filter(Boolean).map((n) => requireModelName(n)),
               /* The base a LoRA must have been made for (config.js), which the
                * Video screen's picker judges against and /api/video checks: null
                * means this engine takes none, and the picker hides. */
@@ -4148,6 +4244,38 @@ const server = http.createServer(async (req, res) => {
         const started=await ggufSetup.start({acceptLicense:b.acceptLicense,quantization:b.quantization});
         return json(res, 202, {...started,...await ggufSetup.status({quantization:b.quantization})});
       } catch(err) {return json(res,400,{error:err.message});}
+    }
+    // Planning has no provider calls and never switches launch modes or generation preferences.
+    if (p === '/api/setup-plan') {
+      const hosts = ['127.0.0.1:' + config.uiPort, 'localhost:' + config.uiPort, '[::1]:' + config.uiPort];
+      if (!hosts.includes(String(req.headers.host || '')) || req.headers.origin && !['http://127.0.0.1:' + config.uiPort, 'http://localhost:' + config.uiPort].includes(req.headers.origin))
+        return json(res, 403, { error: 'Open setup on this PC’s Studio address.' });
+      try {
+        const b = req.method === 'POST' ? (sameOriginLocalJson(req) ? await readBody(req) : null) : {};
+        if (!b) return json(res, 403, { error: 'Save setup from Studio’s own page using JSON.' });
+        if (!['GET', 'POST'].includes(req.method)) return json(res, 405, { error: 'Use GET or POST for setup planning.' });
+        const target = b.target || url.searchParams.get('target') || (config.remoteOnly ? 'runpod' : 'local');
+        if (!['local','runpod'].includes(target)) throw Error('Choose Local or RunPod.');
+        if (req.method === 'POST' && b.verify !== true) {
+          if (!validModelSelection(b.selection)) throw Error('Select at least one category and a supported model for each.');
+          const group = target === 'runpod' ? 'cloudSetup' : 'modelSetup', key = target === 'runpod' ? 'plan' : 'local';
+          const previous = config[group][key]; config[group][key] = { ...b.selection };
+          try { await savePrefs(); } catch (e) { config[group][key] = previous; throw e; }
+        }
+        const machine = target === 'local' ? readMachine(gpuStatus(), ramStatus(), { cpuOnly: cpuOnlyEngine(), vaeMeasured: h3VaeMeasured() }) : undefined;
+        const plan = setupPlan({ selection: selectionFor(config, target), target, machine, localFiles: target === 'local' ? await scanBases(await modelBases()) : [] });
+        const activeMode = config.remoteOnly ? 'runpod' : !config.musicOnly && !config.cloudOnly ? 'local' : 'other';
+        let readiness;
+        if (target === 'local') {
+          let objects = null;
+          if (activeMode === 'local') {
+            const nodes = [...new Set(plan.profiles.flatMap(p => Object.values(profileGraph(p)).map(n => n.class_type)))];
+            objects = Object.assign({}, ...await Promise.all(nodes.map(n => engineDoor.objectInfo(n).catch(() => ({})))));
+          }
+          readiness = await localModelReadiness(plan, { engine: engineDoor, connected: !!objects && Object.keys(objects).length > 0, objects, verify: b.verify === true });
+        }
+        return json(res, 200, { ...plan, activeMode, readiness, machine });
+      } catch (e) { return json(res, 400, { error: e.message }); }
     }
     if (p === "/api/models" && req.method !== "POST") {
       // The selected engine (REQUIRED badge, the recommendation's music slot) follows the disk when unchosen.
@@ -4375,7 +4503,7 @@ const server = http.createServer(async (req, res) => {
           }
           // Deliberately not awaited: these are multi-gigabyte fetches and the
           // UI follows them over the websocket.
-          models.download(String(b.id), { acceptRegion: !!b.acceptRegion }).catch(() => {});
+          models.download(String(b.id), { acceptRegion: !!b.acceptRegion, exact: b.exact === true }).catch(() => {});
           return json(res, 200, { ok: true, started: b.id });
         }
         if (b.action === "cancel") {
@@ -4416,6 +4544,7 @@ const server = http.createServer(async (req, res) => {
      * these formats, rather than shelling out to ffmpeg -- see exportAudio.js
      * for why WAV is not among them. */
     if (p === "/api/export" && req.method === "POST") {
+      if (config.remoteOnly) return json(res, 400, { error: 'Save the original audio from the song menu. Format conversion needs the local Engine.' });
       const b = await readBody(req);
       try {
         /* The supervisor is no longer a parameter: a conversion is a graph, and
@@ -4437,6 +4566,8 @@ const server = http.createServer(async (req, res) => {
             title: m.title, caption: m.caption, lyrics: m.lyrics,
             seed: m.seed, mixSeed: m.mixSeed, steps: m.steps,
             cfg: m.cfg, shift: config.sampling.shift, model: m.model || "int8",
+            ...(m.engine === 'ace-step15' ? { precision: m.acePrecision ?? null, dit: m.aceDit, lm: m.aceLm,
+              trackChecksums: true, executionTarget: m.executionTarget } : {}),
             date: new Date(m.createdAt || Date.now()).toISOString().slice(0, 10),
             ...(await songProvMeta(src)),
             /* ⚠ THE CREDIT TRAVELS WITH THE EXPORT. The conversion writes a
@@ -4524,14 +4655,22 @@ const server = http.createServer(async (req, res) => {
      * power comes back; `allow: false` withdraws that; `stopNow` stops at once. */
     if (p === "/api/power") {
       if (req.method === "POST") {
+        if (req.lanClient || !sameOriginLocalJson(req)) return json(res, 403, { error: "Battery Safe changes require Studio on this PC." });
         const b = await readBody(req);
         let save = false;
-        if (typeof b.batterySafe === "boolean") { config.power.batterySafe = b.batterySafe; save = true; }
+        if (typeof b.batterySafe === "boolean") {
+          config.power.batterySafe = b.batterySafe;
+          // Only this explicit switch opts Windows into starting its reader.
+          if (process.platform === "win32") config.power.windowsMonitoring = b.batterySafe;
+          powerMonitor.setEnabled(batterySafeEnabled(config.power));
+          save = true;
+        }
         if (Number.isInteger(b.graceMinutes) && b.graceMinutes >= 1 && b.graceMinutes <= 60) { config.power.graceMinutes = b.graceMinutes; save = true; }
         if (typeof b.allow === "boolean") batteryGuard.allow(b.allow);
         if (b.stopNow === true) await stopForBattery("You pressed Stop");
-        if (save) savePrefs();
+        if (save) powerPrefsError = await savePrefs() ? null : "Battery Safe changed for this session, but settings could not be saved; the previous setting may return after restart.";
         await powerTick();
+        if (save && powerPrefsError) return json(res, 500, { ...powerSnapshot(), error: powerPrefsError });
       }
       return json(res, 200, powerSnapshot());
     }
@@ -4868,6 +5007,16 @@ const server = http.createServer(async (req, res) => {
       }
       else if (b.action === "delete") library.deletePlaylist(b.id);
       return json(res, 200, { playlists: library.playlists });
+    }
+
+    if (p === '/api/music/ace-check' && req.method === 'POST') {
+      if (!sameOriginLocalJson(req)) return json(res, 403, { error: 'Use this PC’s Studio to check Music setup.' });
+      try {
+        const body = await readBody(req);
+        return json(res, 200, await checkAceMusic(body, { config, getShelf: aceShelf,
+          localFiles: async () => scanBases(await modelBases()), engine: engineDoor,
+          remoteReadiness: (plan, options) => remoteRoutes.modelReadiness(plan, options) }));
+      } catch (e) { return json(res, 400, { error: e.message }); }
     }
 
     if (p === "/api/generate" && req.method === "POST") {
@@ -5264,17 +5413,18 @@ const server = http.createServer(async (req, res) => {
           return json(res, 400, { error: "ACE-Step has no preview pass; turbo is already 8 steps. Press Create instead.", engine: musicEngine, reason: "no-preview" });
         }
         const ace = await aceShelf();
-        const dit = ace.dits.includes(config.music.aceModel) ? config.music.aceModel
-          : ace.dits[0] || (config.remoteOnly ? (config.music.aceModel || "acestep_v1.5_turbo.safetensors") : undefined);
-        if (config.remoteOnly && !ace.lm) ace.lm = config.music.aceLm || "qwen_4b_ace15.safetensors";
-        if (!config.remoteOnly && (!dit || !ace.ready)) {
+        const dit = selectedAceDit(ace.dits, body.aceDit ?? config.music.aceModel);
+        if (!dit || !ace.ready) {
           return json(res, 400, {
-            error: `ACE-Step 1.5 is not ready: ${ace.missing || "no ACE-Step 1.5 DiT in a diffusion_models folder"}. Open the Models screen.`,
-            engine: musicEngine, reason: "weights-missing", needsModel: "musicAceStep15",
+            error: `ACE-Step 1.5 is not ready: ${ace.missing || (config.music.aceModel ? 'the selected DiT is missing' : 'no ACE-Step 1.5 DiT is installed')}. Open Models or Cloud Setup.`,
+            engine: musicEngine, reason: "weights-missing", needsModel: musicCapabilityFor("ace-step15", config.music.aceModel),
           });
         }
-        const shelf = await scanBases(await modelBases());
-        const askedLora = body.lora === undefined ? config.music.aceLora : body.lora;
+        try { selectAceMusicModels(ace, { dit, lm: body.aceLm ?? config.music.aceLm }); }
+        catch (e) { return json(res, 400, { error: e.message, reason: 'planner-missing' }); }
+        if (config.remoteOnly && (body.lora || body.aceCover)) return json(res, 400, { error: 'Remote ACE LoRAs and cover inputs need a supported upload workflow. Use the local workflow for these controls.', reason: 'unsupported-remote-input' });
+        const shelf = config.remoteOnly ? [] : await scanBases(await modelBases());
+        const askedLora = config.remoteOnly ? '' : body.lora === undefined ? config.music.aceLora : body.lora;
         let loraName = typeof askedLora === "string" && askedLora.trim() ? requireModelName(askedLora) : null;
         if (loraName) loraName = findShelfModel(shelf, "loras", loraName)?.name || loraName;
         if (loraName && !(/\.safetensors$/i.test(loraName) && shelf.some((f) => f.folder === "loras" && f.name === loraName))) {
@@ -5299,31 +5449,17 @@ const server = http.createServer(async (req, res) => {
         }
         const seedNow = Number.isFinite(body.seed) ? body.seed : Math.floor(Math.random() * 4294967296);
         body.seed = seedNow;
-        /* MCP's key / meter are YuE2's notation (Em, F#, 3/4): translated here. */
-        const abcKey = typeof body.key === "string" ? body.key.trim().match(/^([A-Ga-g])([#b]?)(m?)$/) : null;
-        const keyscale = body.keyscale || (abcKey ? `${abcKey[1].toUpperCase()}${abcKey[2]} ${abcKey[3] ? "minor" : "major"}` : undefined);
-        const timesignature = body.timesignature || (typeof body.meter === "string" ? body.meter.split("/")[0] : undefined);
-        const meta = aceMeta({ caption: body.caption, bpm: body.bpm, keyscale, timesignature, seed: seedNow });
-        /* The planner: on unless asked off. A LoRA turns it off by default,
-         * because ACE-Step's own LoRA card says to render with the DiT only
-         * (not the "Think" model); a cover turns it off, as ComfyUI's node says. */
-        const codes = cover ? false : body.aceCodes === undefined ? !loraName : !!body.aceCodes;
-        aceJob = {
-          engine: "ace-step15", aceDit: dit, aceLm: ace.lm,
-          lora: loraName,
-          loraStrength: Number.isFinite(Number(body.loraStrength))
-            ? Math.min(Math.max(Number(body.loraStrength), -4), 4)
-            : (Number.isFinite(config.music.aceLoraStrength) ? config.music.aceLoraStrength : 1),
-          bpm: meta.bpm, keyscale: meta.keyscale, timesignature: meta.timesignature, aceMetaFrom: meta.from,
-          language: ACE_LANGUAGES.includes(body.language) ? body.language : "en",
-          aceSteps: Number(body.aceSteps) > 0 ? Math.min(Math.round(Number(body.aceSteps)), 100) : undefined,
-          aceCfg: Number(body.aceCfg) > 0 ? Math.min(Number(body.aceCfg), 20) : undefined,
-          aceCodes: codes,
-          acePlanTemp: Number.isFinite(Number(body.acePlanTemp)) && body.acePlanTemp !== "" && body.acePlanTemp !== null ? Math.min(Math.max(Number(body.acePlanTemp), 0), 2) : undefined,
-          aceCover: cover,
-        };
-        /* ACE-Step's own instrumental: "[Instrumental]" in the lyrics. */
-        if (body.instrumental || !String(body.lyrics || "").trim()) body.lyrics = "[Instrumental]";
+        const prepared = prepareAceMusicInput(body, { shelf: ace, savedDit: config.music.aceModel,
+          savedLm: config.music.aceLm, lora: loraName, cover, defaultLoraStrength: config.music.aceLoraStrength ?? 1,
+          maxDuration: config.music.engines['ace-step15'].maxDuration || 300 });
+        aceJob = prepared.job;
+        body.lyrics = prepared.lyrics;
+        if (prepared.profile?.id === 'ace15-xl-sft') {
+          const checked = await checkAceMusic({ ...body, verify: true }, { config, prepared, getShelf: async () => ace,
+            localFiles: async () => scanBases(await modelBases()), engine: engineDoor,
+            remoteReadiness: (plan, options) => remoteRoutes.modelReadiness(plan, options) });
+          if (!checked.ready) return json(res, 400, { error: checked.error || 'Check the selected model files, AI connection and workflow before creating.', reason: 'ace-not-ready', readiness: checked });
+        }
       }
 
       /* YuE2 through ComfyUI: the refusals that cost nothing. */
@@ -5467,13 +5603,13 @@ const server = http.createServer(async (req, res) => {
           config.music.engines[musicEngine]?.maxDuration || 300),
         // Both map to real model parameters. No cosmetic dials — the
         // ComfyUI-literate half of the audience will check.
-        steps: body.steps ? Math.min(Math.max(Number(body.steps), 6), 40) : undefined,
-        cfg: body.cfg ? Math.min(Math.max(Number(body.cfg), 1), 5) : undefined,
+        steps: aceJob ? aceJob.aceSteps : body.steps ? Math.min(Math.max(Number(body.steps), 6), 40) : undefined,
+        cfg: aceJob ? aceJob.aceCfg : body.cfg ? Math.min(Math.max(Number(body.cfg), 1), 5) : undefined,
         // Separated so the two guidance scales can be swept independently; the
         // UI still sends one `cfg` and both follow it.
         arCfg: body.arCfg ? Math.min(Math.max(Number(body.arCfg), 0), 5) : undefined,
         flowCfg: body.flowCfg ? Math.min(Math.max(Number(body.flowCfg), 0), 5) : undefined,
-        model: ["int8", "fp16", "fp32"].includes(body.model) ? body.model : config.music.precision,
+        model: aceJob ? aceJob.acePrecision : ["int8", "fp16", "fp32"].includes(body.model) ? body.model : config.music.precision,
         instrumental: !!body.instrumental,
         preview: !!body.preview,
         reusesConditioning: !!body.reusesConditioning,
@@ -8554,7 +8690,20 @@ const server = http.createServer(async (req, res) => {
           h3: h3Status({ gpu: gpuStatus(), ram: ramStatus(), cpuOnly: cpuOnlyEngine(), vaeMeasured: h3VaeMeasured() }),
           framed: !!(b.fromCover || b.fromUpload || b.toCover || b.toUpload || b.framed === true),
           control: !!(b.sourceVideo || b.source_video) });
-        return json(res, 200, { ok: !plan.refusal, engine: gate.engine, enabled: !!config.video.enabled, ...plan });
+        let videoControl = null, videoModels = null;
+        if (!plan.refusal) {
+          let picked;
+          try { picked = await videoModelPatch(b, gate.engine); }
+          catch (error) { picked = { error: error.message }; }
+          if (picked.error) return json(res, 200, { ok: false, engine: gate.engine, refusal: { error: picked.error, reason: "video-model" }, warnings: plan.warnings || [] });
+          videoModels = picked.models || null;
+          try { videoControl = await videoControlService.check({ ...b, ...optionalH3 }, { engineKey: gate.engine,
+            width: plan.width, height: plan.height, fps: videoEngine(gate.engine).fps,
+            frames: alignFrames(plan.seconds, videoEngine(gate.engine).fps, gate.engine), customWorkflow: !!assignedTo("video"),
+            models: videoModels, refImages: plan.refImages || b.refImages || [], refAudios: b.refAudios || [] }); }
+          catch (error) { return json(res, 200, { ok: false, engine: gate.engine, refusal: videoControlFailure(error), warnings: plan.warnings || [] }); }
+        }
+        return json(res, 200, { ok: !plan.refusal, engine: gate.engine, enabled: !!config.video.enabled, ...plan, videoControl, videoModels });
       }
       if (b.action === "create") {
         if (!config.video.enabled) return json(res, 400, { error: "Video is switched off in Settings." });
@@ -8641,54 +8790,13 @@ const server = http.createServer(async (req, res) => {
           return /^aiplay_frame_[0-9a-f]{12}\.(png|jpg|webp)$/.test(nm) ? nm : undefined;
         };
 
-        /* ── VIDEO-TO-VIDEO, AND THE MODEL IT NEEDS ─────────────────────────
-         *
-         * ⚠ THE REFUSAL IS THE PLACE TO OFFER THE DOWNLOAD. Asking for this
-         * without the patch is the exact moment somebody learns the feature
-         * exists, so the sentence names the catalogue row, its size and the
-         * tool that fetches it rather than saying the option is unsupported.
-         * The territory clause is named too: it is a patch on H3's weights and
-         * carries H3's Applicable Territory, and finding that out AFTER a
-         * 2.3 GB download would be finding it out too late.
-         */
-        const control = { video: null, patch: null, strength: 1, start: 0, end: 1 };
-        if (b.sourceVideo || b.source_video) {
-          const asked = String(b.sourceVideo || b.source_video);
-          if (asked.includes("..") || asked.includes("/") || asked.includes("\\")) {
-            return json(res, 400, { error: "Name a clip on this machine, not a path.", reason: "control-video" });
-          }
-          if (eng === "ltx") {
-            return json(res, 400, {
-              error: "Video-to-video is H3's path \u2014 LTX has no structural video input. Switch the engine to h3.",
-              reason: "control-engine",
-            });
-          }
-          const row = CATALOG.find((c) => c.id === "videoH3FunControl");
-          /* Readiness is "every file present" (models.js:2954), and this row is
-           * one file — so the check is the file, not a second opinion about it. */
-          const have = row?.files?.length
-            ? (await Promise.all(row.files.map((f) => stat(f.dest).then(() => true).catch(() => false)))).every(Boolean)
-            : false;
-          if (!have) {
-            return json(res, 400, {
-              error: "Driving a render with a whole video needs the H3 Fun ControlNet patch, which is not on this "
-                + "machine yet. It is 2.3 GB, one file. Get it on the Models screen, or with the tool "
-                + "`download_model` id videoH3FunControl \u2014 it is a patch on H3's weights, so it carries H3's "
-                + "territory clause and the Models screen shows that before it fetches a byte.",
-              reason: "needs-model",
-              /* The row, so a screen can offer the button and an assistant can
-               * act without a second round trip to find out what to download. */
-              needsModel: { id: "videoH3FunControl", label: row?.label || null, bytes: row?.files?.[0]?.bytes || null,
-                            tool: "download_model", region: row?.region?.excluded || null },
-            });
-          }
-          control.video = asked;
-          control.patch = path.basename(row.files[0].dest);
-          const num = (x, d, lo, hi) => (Number.isFinite(Number(x)) ? Math.min(hi, Math.max(lo, Number(x))) : d);
-          control.strength = num(b.controlStrength ?? b.control_strength, 1, 0, 2);
-          control.start = num(b.controlStart ?? b.control_start, 0, 0, 1);
-          control.end = num(b.controlEnd ?? b.control_end, 1, 0, 1);
-        }
+        // Validate options before staging any references; the shared media/node
+        // check below uses the actual render plan in both check and create.
+        let controlOptions;
+        try { controlOptions = h3ControlOptions(b); }
+        catch (error) { return json(res, 400, videoControlFailure(error)); }
+        const control = { video: controlOptions?.source || null, patch: null,
+          strength: controlOptions?.strength ?? 1, start: controlOptions?.start ?? 0, end: controlOptions?.end ?? 1 };
         let firstFrame, lastFrame, midFrames = [], refImages = [], refAudios = [], audioTrack, personaStaged = null, personaLost = 0;
         /* A song that could not be staged (songstage.js): the soundtrack is
          * refused below, a reference audio is said as a warning. */
@@ -8790,6 +8898,16 @@ const server = http.createServer(async (req, res) => {
           control: !!control.video });
         if (plan.refusal) return json(res, 400, { error: plan.refusal.error, reason: plan.refusal.reason,
           ...(plan.refusal.needsModel ? { needsModel: plan.refusal.needsModel } : {}) });
+        const picked = await videoModelPatch(b, eng);
+        if (picked.error) return json(res, 400, { error: picked.error });
+        let videoControl;
+        try {
+          videoControl = await videoControlService.check({ ...b, ...optionalH3 }, { engineKey: eng,
+            width: plan.width, height: plan.height, fps: videoEngine(eng).fps,
+            frames: alignFrames(plan.seconds, videoEngine(eng).fps, eng), customWorkflow: !!assignedTo("video"),
+            models: picked.models || null, refImages: plan.refImages || refImages || [], refAudios });
+          if (videoControl) control.patch = videoControl.patch;
+        } catch (error) { return json(res, 400, videoControlFailure(error)); }
         /* What the render really carries: the request's references, then the
          * character's (bound in plan.prompt). A character picture that could
          * not be found is said, not dropped unsaid. */
@@ -8806,12 +8924,6 @@ const server = http.createServer(async (req, res) => {
          * (measured r=0.995 mel); H3 freezes AND anchors so the DiT can read
          * the vocal while the output plays the real track (measured r=0.984
          * waveform on the freeze). No refusal left on this axis. */
-
-        /* A model file the person named instead of the engine's own, with the
-         * encoder and VAEs to load beside it. Checked against the shelves here,
-         * so a wrong name is a sentence now rather than a failed render later. */
-        const picked = await videoModelPatch(b, eng);
-        if (picked.error) return json(res, 400, { error: picked.error });
 
         const id = `v${Date.now().toString(36)}`;
         const job = art.request({
@@ -8854,6 +8966,7 @@ const server = http.createServer(async (req, res) => {
             controlStrength: control.strength,
             controlStart: control.start,
             controlEnd: control.end,
+            videoControl,
             // Song under the clip, both engines (H3: frozen + anchored = lip-sync).
             audioTrack,
             /* ⚠ Defaults come from the ENGINE, not from `config.video`.
@@ -9038,12 +9151,16 @@ const server = http.createServer(async (req, res) => {
       if (b.imageEngine !== undefined) {
         /* config.js's own check for the saved value (the covers' list minus "checkpoint"). */
         if (!PREF_PATHS.find(([g, k]) => g === "image" && k === "engine")[2](b.imageEngine)) {
-          return json(res, 400, { error: "imageEngine must be flux2 | zimage | zimage-base | anima | ideogram4 | krea2 | qwen-image-2.1 (your own model file is picked per picture)" });
+          return json(res, 400, { error: "imageEngine must be flux2 | zimage | zimage-base | anima | ideogram4 | krea2 | qwen-image-2.1 | moss-image (your own model file is picked per picture)" });
         }
       }
       if (b.engine !== undefined) {
-        if (!["flux2", "zimage", "zimage-base", "anima", "ideogram4", "krea2", "qwen-image-2.1", "checkpoint"].includes(b.engine)) {
-          return json(res, 400, { error: "engine must be flux2 | zimage | zimage-base | anima | ideogram4 | krea2 | qwen-image-2.1 | checkpoint" });
+        if (!["flux2", "zimage", "zimage-base", "anima", "ideogram4", "krea2", "qwen-image-2.1", "moss-image", "checkpoint"].includes(b.engine)) {
+          return json(res, 400, { error: "engine must be flux2 | zimage | zimage-base | anima | ideogram4 | krea2 | qwen-image-2.1 | moss-image | checkpoint" });
+        }
+        if (b.engine === MOSS_IMAGE_ENGINE) {
+          const readiness = await mossImageStatus();
+          if (!readiness.ready) return json(res, 400, readiness);
         }
         if (b.engine === QWEN_IMAGE_ENGINE) {
           const readiness = await qwenImageStatus();
@@ -9393,6 +9510,23 @@ const server = http.createServer(async (req, res) => {
        * another origin must not choose either. Refused before the body is read. */
       if (!sameOriginLocalJson(req)) return json(res, 403, { error: "Changing the rig or output folder is only accepted from Studio's own page or a local client." });
       const b = await readBody(req);
+      if (Object.hasOwn(b, "comfyCheckUpdatesOnStart")) {
+        if (typeof b.comfyCheckUpdatesOnStart !== "boolean") return json(res, 400, { error: "The startup update check must be on or off." });
+        try {
+          const savedSettings = JSON.parse(await readFile(config.settingsFile, "utf8"));
+          if (!savedSettings || typeof savedSettings !== "object" || Array.isArray(savedSettings)) throw new Error("Invalid settings");
+        } catch (error) {
+          if (error.code !== "ENOENT") return json(res, 409, { error: "Restore access to valid Studio settings before saving this preference." });
+        }
+        const before = config.comfy.checkUpdatesOnStart;
+        config.comfy.checkUpdatesOnStart = b.comfyCheckUpdatesOnStart;
+        if (!await savePrefs()) {
+          config.comfy.checkUpdatesOnStart = before;
+          return json(res, 500, { error: "The startup update check preference could not be saved." });
+        }
+        if (b.comfyCheckUpdatesOnStart) void comfyMaintenance.start().catch(() => {});
+        return json(res, 200, { ok: true, checkUpdatesOnStart: config.comfy.checkUpdatesOnStart, needsRestart: false });
+      }
       /* A folder on this computer's own disk. \\server\share is absolute to
        * path.win32, so a UNC or device path (\\?\, \\.\) would pass the stat
        * below and make Studio run, or write to, another machine; it is refused
@@ -9527,6 +9661,9 @@ const server = http.createServer(async (req, res) => {
      * that knows about both kinds.
      */
     if (p === "/api/clips" && req.method !== "POST") {
+      let favorites;
+      try { favorites = await clipFavorites.read(); }
+      catch (error) { const failure=clipFavoriteFailure(error); return json(res,failure.status,failure.body); }
       let names = [];
       // .webm as well as .mp4: studio exports are WebM (MediaRecorder's format),
       // and a listing that only knows about .mp4 makes them invisible in the very
@@ -9546,7 +9683,7 @@ const server = http.createServer(async (req, res) => {
         const owner = [...library.meta.entries()]
           .find(([f]) => f.replace(/\.(flac|mp3|opus|wav)$/i, "") === stem);
         return {
-          name, bytes: st?.size ?? 0, at: (clipMeta.get(name) ?? null)?.madeAt ?? st?.mtimeMs ?? 0,
+          name, starred:favorites.has(name), bytes: st?.size ?? 0, at: (clipMeta.get(name) ?? null)?.madeAt ?? st?.mtimeMs ?? 0,
           track: owner ? owner[0] : null,
           title: owner ? (owner[1].title || owner[0]) : null,
           // Render time. `clipSeconds` is read too, for sidecars written before
@@ -9790,6 +9927,15 @@ const server = http.createServer(async (req, res) => {
      * graph in localStorage is how you lose a week's work to a cleared cache.
      */
     /** The Images screen: make one, list them, throw one away. */
+    if (p === "/api/images/moss-status" && req.method === "GET") {
+      const options = {};
+      for (const key of ["dit", "encoder", "vae"]) {
+        const value = url.searchParams.get(key);
+        if (value && value !== "auto") options[key] = value;
+      }
+      if (url.searchParams.has("mossPreset")) options.mossPreset = url.searchParams.get("mossPreset");
+      return json(res, 200, await mossImageStatus({ options }));
+    }
     if (p === "/api/images/qwen-status" && req.method === "GET") {
       const options = {};
       for (const key of ["dit", "encoder", "vae"]) {
@@ -9890,7 +10036,7 @@ const server = http.createServer(async (req, res) => {
        * the machine's pick from the disk when nobody chose (machineDefaults). */
       if (!b.engine && typeof machineDefaults === "function") await machineDefaults().catch(() => null);
       const engine = b.engine || config.image.engine;
-      if (!["flux2", "zimage", "zimage-base", "anima", "ideogram4", "krea2", "qwen-image-2.1", "checkpoint"].includes(engine)) return json(res, 400, { error: `Unknown image engine: ${engine}.` });
+      if (!["flux2", "zimage", "zimage-base", "anima", "ideogram4", "krea2", "qwen-image-2.1", "moss-image", "checkpoint"].includes(engine)) return json(res, 400, { error: `Unknown image engine: ${engine}.` });
       /* FAST DRAFT (QWEN_DRAFT in qwen-image.js): Viggle's 5-step turbo LoRA on
        * Qwen Image 2.1, about 3x quicker and worse at small text. Refused, never
        * ignored, on any other engine; the base-only cases (transparent, more
@@ -9899,6 +10045,19 @@ const server = http.createServer(async (req, res) => {
        * refused by the graph builder below with its own sentences. */
       if (b.draft !== undefined && typeof b.draft !== "boolean") return json(res, 400, { error: QWEN_DRAFT.refusals.type });
       if (b.draft === true && engine !== QWEN_IMAGE_ENGINE) return json(res, 400, { error: QWEN_DRAFT.refusals.engine, draftRefused: "engine" });
+      if (b.mossPreset !== undefined && engine !== MOSS_IMAGE_ENGINE) return json(res, 400, { error: "mossPreset is only supported by the MOSS-Image engine." });
+      let mossRecipe;
+      if (engine === MOSS_IMAGE_ENGINE) {
+        if (assignedTo("cover")) return json(res, 400, { error: "MOSS-Image needs its native workflow. Unassign the custom Cover workflow in Settings first." });
+        try {
+          const selected = mossImageOptions({ ...b, prompt: b.prompt || "readiness check", seed: b.seed ?? 0 });
+          const { seed: ignoredSeed, prompt: ignoredPrompt, prefix: ignoredPrefix, thumbSize: ignoredThumbSize, ...normalized } = selected;
+          Object.assign(b, normalized);
+          const readiness = await mossImageStatus({ options: selected });
+          if (!readiness.ready) return json(res, 400, readiness);
+          mossRecipe = readiness.mossRecipe;
+        } catch (err) { return json(res, 400, { error: err.message }); }
+      }
       if (engine === QWEN_IMAGE_ENGINE) {
         try {
           const graph = qwenImageGraph({ ...b, prompt: b.prompt || "readiness check", seed: b.seed ?? 0 });
@@ -10189,6 +10348,7 @@ const server = http.createServer(async (req, res) => {
            * provenance (draft: true and the LoRA). Absent unless asked for, so
            * every other render's job is unchanged. */
           ...(engine === QWEN_IMAGE_ENGINE && b.draft === true ? { draft: true } : {}),
+          ...(engine === MOSS_IMAGE_ENGINE ? { mossPreset: b.mossPreset } : {}),
           /* An explicitly accepted peer job is pinned to the built-in Qwen base
            * graph. A custom cover assignment must not silently replace it. */
           ...(collabImageBase ? { collabImageBase: true, collabRefHashes } : {}),
@@ -10209,6 +10369,7 @@ const server = http.createServer(async (req, res) => {
            * The ceiling differs too: base's own README suggests up to 50, so
            * the 30 that suits FLUX and Ideogram would clip a legitimate ask. */
           steps: (() => {
+            if (engine === MOSS_IMAGE_ENGINE) return b.steps ?? MOSS_IMAGE_PRESET.steps;
             if (engine === QWEN_IMAGE_ENGINE) return b.steps ?? QWEN_IMAGE_PRESET.steps;
             const zimage = engine === "zimage" || engine === "zimage-base";
             const asked = Number(b.steps);
@@ -10237,8 +10398,8 @@ const server = http.createServer(async (req, res) => {
             ? Math.min(Math.round(Number(b.clipSkip)), 12) : undefined,
           /* The checkpoint and Anima take a sampler and schedule (animaGraph reads
            * them); the other engines' graphs fix their own. */
-          sampler: (engine === "checkpoint" || engine === "anima" || engine === QWEN_IMAGE_ENGINE) && typeof b.sampler === "string" ? b.sampler.slice(0, 40) : undefined,
-          scheduler: (engine === "checkpoint" || engine === "anima" || engine === QWEN_IMAGE_ENGINE) && typeof b.scheduler === "string" ? b.scheduler.slice(0, 40) : undefined,
+          sampler: (engine === "checkpoint" || engine === "anima" || engine === QWEN_IMAGE_ENGINE || engine === MOSS_IMAGE_ENGINE) && typeof b.sampler === "string" ? b.sampler.slice(0, 40) : undefined,
+          scheduler: (engine === "checkpoint" || engine === "anima" || engine === QWEN_IMAGE_ENGINE || engine === MOSS_IMAGE_ENGINE) && typeof b.scheduler === "string" ? b.scheduler.slice(0, 40) : undefined,
           refImages,
         },
       };
@@ -10255,6 +10416,7 @@ const server = http.createServer(async (req, res) => {
         negative: shot.video.negative || "", seed: shot.seed,
         width: shot.video.width, height: shot.video.height,
         steps: shot.video.steps, cfg: shot.video.cfg, refImages,
+        ...(engine === MOSS_IMAGE_ENGINE ? { mossPreset: b.mossPreset } : {}),
         ...(engine === QWEN_IMAGE_ENGINE ? { refSizing: b.refSizing, refResolution: b.refResolution, transparent: b.transparent, dit: b.dit, encoder: b.encoder, vae: b.vae, draft: b.draft === true } : {}),
       };
       let dupNote = null;
@@ -10287,6 +10449,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, {
         ok: true, id, job: job && { id: job.id }, seed: shot.seed,
         ...(shot.video.draft ? { draft: true } : {}),
+        ...(engine === MOSS_IMAGE_ENGINE ? { mossPreset: b.mossPreset, mossRecipe } : {}),
         /* The expansion travels back so the screen and an MCP caller both see
          * WHAT WAS ACTUALLY ASKED, not the template. `promptChoices` fed back
          * into a later call reproduces this exact prompt. */
@@ -10435,6 +10598,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === "/api/loras" && req.method === "GET") {
+      if (remoteRoutes) {
+        const remote = await remoteRoutes.start();
+        if (!remote.status().configured) return json(res, 200, { loras: [], remote: true });
+        try { return json(res, 200, { ...await remote.loras(), remote: true }); }
+        catch (error) { return json(res, 200, { loras: [], remote: true, warning: error.message }); }
+      }
       /* Every base the engine loads from (the Models screen's folder, a ComfyUI
        * Desktop install's extra paths), not only config.modelsDir: the music
        * checkpoint list reads the same shelves, and a LoRA beside a checkpoint
@@ -13123,6 +13292,7 @@ const server = http.createServer(async (req, res) => {
 
     if (p === "/api/clips" && req.method === "POST") {
       const b = await readBody(req);
+      if (b.action === 'flag') return clipFavoriteFlagRoute(req,res,b);
 
       /**
        * MEASURE a clip instead of judging it. Free, no GPU, no model.
@@ -13761,6 +13931,7 @@ const server = http.createServer(async (req, res) => {
        * unchanged (the app uses this door only for media and covers). */
       const base = { "Content-Type": type, "Accept-Ranges": "bytes",
         "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox" };
+      if (url.searchParams.has('download')) base['Content-Disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(name))}`;
 
       /* ⚠ THROUGH sendFile, WHICH LETS GO OF THE FILE WHEN THE PLAYER DOES.
        * This door used to `.pipe(res)` a bare read stream, and a player that
@@ -13836,10 +14007,23 @@ batch.on("update", () => push(jobs.snapshot()));
 let powerNow = { known: false, onBattery: false, hasBattery: false, percent: null };
 const batteryGuard = new BatteryGuard();
 let powerBusy = false;
+let powerPrefsError = null;
+const powerMonitor = new PowerMonitor((r) => {
+  const was = powerNow.onBattery;
+  powerNow = r;
+  if (!r.known) {
+    powerBusy = false;
+    batteryGuard.update({ power: r, busy: false, enabled: false, graceMs: 0 });
+  }
+  if (r.known && r.onBattery !== was) console.log(r.onBattery ? `  [battery] running on battery${r.percent != null ? ` (${r.percent}%)` : ""}` : "  [battery] back on mains power");
+  powerTick().catch(() => {});
+});
 
 function powerSnapshot() {
   return {
-    batterySafe: config.power.batterySafe, graceMinutes: config.power.graceMinutes,
+    batterySafe: batterySafeEnabled(config.power), graceMinutes: config.power.graceMinutes,
+    monitoring: { platform: process.platform, enabled: powerMonitor.enabled, state: powerMonitor.state },
+    settingsError: powerPrefsError,
     ...powerNow, busy: powerBusy, ...batteryGuard.snapshot(),
   };
 }
@@ -13878,9 +14062,12 @@ async function powerTick() {
   try {
     /* Only ask the engine when the answer can matter: on mains, with Battery
      * Safe off, or with the person's go-ahead, nothing will be stopped. */
-    const watch = powerNow.onBattery && config.power.batterySafe && !batteryGuard.consent;
-    powerBusy = watch ? await gpuWorkRunning() : false;
-    const r = batteryGuard.update({ power: powerNow, busy: powerBusy, enabled: config.power.batterySafe, graceMs: config.power.graceMinutes * 60_000 });
+    const enabled = batterySafeEnabled(config.power);
+    const watch = powerNow.onBattery && enabled && !batteryGuard.consent;
+    const busy = watch ? await gpuWorkRunning() : false;
+    // A setting or sensor result can change while engine status is pending.
+    powerBusy = !!(busy && powerNow.known && powerNow.onBattery && batterySafeEnabled(config.power) && !batteryGuard.consent);
+    const r = batteryGuard.update({ power: powerNow, busy: powerBusy, enabled: batterySafeEnabled(config.power), graceMs: config.power.graceMinutes * 60_000 });
     if (r.stop) {
       await stopForBattery(`Running on battery for ${config.power.graceMinutes} minute${config.power.graceMinutes === 1 ? "" : "s"}`);
       powerBusy = false;
@@ -13903,6 +14090,8 @@ server.on("error", (err) => {
 server.listen(config.uiPort, LAN.on ? "0.0.0.0" : "127.0.0.1", async () => {
   console.log(`\n  AIPLAY Studio  →  http://127.0.0.1:${config.uiPort}\n`);
   persistStartLevel().catch((err) => console.warn(`  [settings] the starting level was not saved: ${err.message}`));
+  // This lookup cannot delay startup or stop offline use; installs require a press.
+  void comfyMaintenance.start().catch((error) => console.warn(`  [ComfyUI updates] ${error.message}`));
   if (LAN.why) console.warn(`  [network] ${LAN.why}`);
   if (LAN.on) {
     const ips = lanAddresses().map((a) => `http://${a.ip}:${config.uiPort}`);
@@ -13924,14 +14113,9 @@ server.listen(config.uiPort, LAN.on ? "0.0.0.0" : "127.0.0.1", async () => {
    * second". The launcher sets AIPLAY_OPEN=1; anything else driving this server
    * (tests, headless runs, a restart in place) leaves it unset and keeps its
    * browser to itself. */
-  /* Battery Safe: a reading every ten seconds, and a countdown check every
-   * five so the on-screen timer and the stop are never a reading late. */
-  watchPower((r) => {
-    const was = powerNow.onBattery;
-    powerNow = r;
-    if (r.onBattery !== was) console.log(r.onBattery ? `  [battery] running on battery${r.percent != null ? ` (${r.percent}%)` : ""}` : "  [battery] back on mains power");
-    powerTick().catch(() => {});
-  });
+  /* Battery Safe: Windows starts no battery helper until explicitly enabled
+   * in Settings; old saved defaults are not an opt-in. */
+  powerMonitor.setEnabled(batterySafeEnabled(config.power));
   setInterval(() => { if (powerNow.onBattery) powerTick().catch(() => {}); }, 5000).unref();
 
   if (process.env.AIPLAY_OPEN === "1") {
@@ -14055,8 +14239,10 @@ server.listen(config.uiPort, LAN.on ? "0.0.0.0" : "127.0.0.1", async () => {
 
 for (const sig of ["SIGINT", "SIGTERM"]) {
   process.on(sig, async () => {
+    powerMonitor.dispose();
     console.log("\n  shutting the engine down…");
     await comfy.stop();
     process.exit(0);
   });
 }
+process.once("exit", () => powerMonitor.dispose());

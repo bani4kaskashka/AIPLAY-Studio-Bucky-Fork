@@ -6,11 +6,113 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
+import { mountSettingsSections, revealSetting } from '../web/settings-sections.js';
 
 // Source assertions describe lines, independent of the checkout's EOL setting.
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const HTML = read("web/index.html");
 const APP = read("web/app.js");
+
+// Small DOM fixture for navigation: no controls are reconstructed on selection.
+function settingsFixture(hash = '') {
+  const win = new EventTarget();
+  win.Event = Event;
+  win.location = new URL(`http://localhost/?view=settings${hash}`);
+  win.history = Object.fromEntries(['pushState', 'replaceState'].map(method => [method,
+    (_state, _title, url) => { win.location = new URL(url); }]));
+  const nodes = new Map();
+  const doc = { defaultView: win, getElementById: id => nodes.get(id), createElement: () => element() };
+  function element(id) {
+    const el = new EventTarget();
+    Object.assign(el, { id, ownerDocument: doc, dataset: {}, children: [], hidden: false, attrs: {},
+      setAttribute(key, value) { this.attrs[key] = value; },
+      replaceChildren(...children) { this.children = children; },
+      scrollIntoView() {}, focus() { doc.activeElement = this; },
+      click() { this.dispatchEvent(new Event('click', { cancelable: true })); },
+    });
+    const classes = new Set();
+    el.classList = { toggle: (name, on) => on ? classes.add(name) : classes.delete(name), contains: name => classes.has(name) };
+    if (id) nodes.set(id, el);
+    return el;
+  }
+  const page = element('settings'), nav = element();
+  const cards = ['set-level', 'set-covers', 'set-hosted'].map(id => {
+    const card = element(id);
+    card.dataset.nav = id;
+    card.closest = query => query === '#settings' ? page : card;
+    return card;
+  });
+  page.querySelectorAll = () => cards;
+  page.querySelector = () => nav;
+  nav.closest = () => page;
+  const control = element('runpodWorkerUrl');
+  control.value = 'unsaved local text';
+  control.closest = query => query === '#settings' ? page : cards[2];
+  const selected = () => cards.filter(card => !card.hidden && !card.classList.contains('section-inactive')).map(card => card.id);
+  return { win, doc, page, nav, cards, control, selected };
+}
+
+test('Settings opens one topic and keeps unsaved controls and every topic link', () => {
+  const f = settingsFixture();
+  mountSettingsSections(f.nav);
+  assert.deepEqual(f.selected(), ['set-level']);
+  f.nav.children[2].click();
+  assert.deepEqual(f.selected(), ['set-hosted']);
+  f.nav.children[1].click();
+  assert.deepEqual(f.selected(), ['set-covers']);
+  assert.equal(f.control.value, 'unsaved local text');
+  assert.equal(f.doc.getElementById('runpodWorkerUrl'), f.control);
+  assert.equal(f.nav.children.length, 3);
+  assert.equal(f.nav.children[1].attrs['aria-selected'], 'true');
+  assert.equal(f.nav.children[2].tabIndex, -1);
+  assert.equal(f.win.location.hash, '#set-covers');
+});
+
+test('Settings restores nested links and browser Back to the initial topic', () => {
+  const f = settingsFixture('#runpodWorkerUrl');
+  mountSettingsSections(f.nav);
+  assert.deepEqual(f.selected(), ['set-hosted']);
+  f.win.location.hash = '#set-covers';
+  f.win.dispatchEvent(new Event('hashchange'));
+  assert.deepEqual(f.selected(), ['set-covers']);
+  f.win.location.hash = '';
+  f.win.dispatchEvent(new Event('popstate'));
+  assert.deepEqual(f.selected(), ['set-level']);
+  revealSetting(f.control);
+  assert.deepEqual(f.selected(), ['set-hosted']);
+  assert.equal(f.win.location.hash, '#set-hosted');
+});
+
+test('Settings respects unavailable topics and recovers if the selected topic disappears', () => {
+  const f = settingsFixture('#set-hosted');
+  mountSettingsSections(f.nav);
+  f.cards[2].hidden = true;
+  mountSettingsSections(f.nav);
+  assert.deepEqual(f.selected(), ['set-level']);
+  assert.equal(f.nav.children.length, 2);
+  revealSetting(f.control);
+  assert.deepEqual(f.selected(), ['set-level']);
+  f.cards[2].hidden = false;
+  mountSettingsSections(f.nav);
+  assert.deepEqual(f.selected(), ['set-hosted']);
+  assert.equal(f.nav.children.length, 3);
+});
+
+test('Back from another screen reopens Settings through the existing view controller', () => {
+  const f = settingsFixture('#set-covers');
+  mountSettingsSections(f.nav);
+  f.page.hidden = true;
+  let opened = 0;
+  f.doc.querySelector = () => ({ click() { opened++; f.page.hidden = false; } });
+  f.win.dispatchEvent(new Event('popstate'));
+  assert.equal(opened, 1);
+  assert.equal(f.page.hidden, false);
+  assert.deepEqual(f.selected(), ['set-covers']);
+  f.page.hidden = true;
+  f.win.location.search = '?view=create';
+  f.win.dispatchEvent(new Event('popstate'));
+  assert.equal(opened, 1, 'an unrelated screen is not redirected by an old Settings hash');
+});
 
 test("the index loads the kit's stylesheet and script", () => {
   assert.match(HTML, /href="ui\.css"/);
@@ -476,4 +578,147 @@ test("the rail has its own width and a grip to set it", () => {
   // long halves (free space, core count, drive fullness) are in the tooltips.
   assert.match(APP, /\$\("diskText"\)\.textContent = `\$\{size\(d\.modelBytes\)\} models`;/);
   assert.match(APP, /\$\("cpuText"\)\.textContent = pct == null \? `\$\{c\.cores\} cores` : `\$\{pct\}% CPU`;/);
+});
+
+/* Exercise the real engine-change -> reference-paint -> shape sequence. A
+ * correct preset alone did not protect the visible form: the last painter
+ * used to overwrite MOSS's CFG ceiling and hide its negative prompt. */
+function imageControlsFixture() {
+  const nodes = new Map();
+  const $ = id => {
+    if (!nodes.has(id)) nodes.set(id, { value: "", hidden: false, disabled: false, dataset: {}, options: [],
+      parentElement: { hidden: false, previousElementSibling: { hidden: false } },
+      insertAdjacentHTML(_where, html) { this.options.push({ value: /<option>(.*?)<\/option>/.exec(html)[1] }); },
+    });
+    return nodes.get(id);
+  };
+  const rows = [];
+  const labels = new Map();
+  for (const id of ["imgCfg", "imgNeg"]) {
+    const label = new RegExp(`<label\\b([^>]*for="${id}"[^>]*)>`).exec(HTML);
+    const field = new RegExp(`<span\\b([^>]*data-engineonly="[^"]+"[^>]*)><input id="${id}"`).exec(HTML);
+    assert.ok(label && field, `${id} controls use the real Pictures markup`);
+    const makeRow = attrs => ({ hidden: /\bhidden\b/.test(attrs), dataset: { engineonly: /data-engineonly="([^"]+)"/.exec(attrs)[1] } });
+    const labelNode = makeRow(label[1]), fieldNode = makeRow(field[1]);
+    labels.set(id, labelNode); $(id).parentElement = fieldNode;
+    fieldNode.previousElementSibling = labelNode; rows.push(labelNode, fieldNode);
+  }
+  $("imgCkpt").value = "ordinary.safetensors";
+  $("imgCkpt").options = [{ value: "ordinary.safetensors" }, { value: "moss_image_sft_int8_convrot.safetensors" }];
+  $("imgDitKind").value = "auto";
+  const refs = [];
+  const context = vm.createContext({ $, document: {
+    querySelectorAll: selector => { assert.equal(selector, "[data-engineonly]"); return rows; },
+    querySelector: selector => labels.get(/label\[for="([^"]+)"\]/.exec(selector)[1]),
+  }, imgCkptShelf: [
+    { name: "ordinary.safetensors", engine: "checkpoint", folder: "checkpoints" },
+    { name: "moss_image_sft_int8_convrot.safetensors", engine: "moss-image", family: "moss-image", folder: "diffusion_models" },
+  ], imgRefs: refs, IMG_REF_MAX: 10, picDrops: {}, esc: String, URLSearchParams,
+    imgQwenRequestedKey: "", imgQwenCheckSoon() {}, imgMossKey: "", imgMossReady: false, imgMossRequest: 0,
+    fetch: async () => ({json: async () => ({ready:true})}),
+    imgRefCandidates: () => [], imgRefHoverHide() {}, imgRefTagNote() {},
+    iedStatus() {}, iedPreviewSchedule() {}, imgQwenPaint() {}, imgDraftPaint() {}, imgQueueGate() {},
+    imgQwenCheck() { context.imgQwenShape(); }, imgLoadSampling: async () => {},
+    imgLoadPersonas() {}, imgLoadTemplates() {},
+  });
+  const fn = name => {
+    const match = new RegExp(`^(?:export )?(?:async )?function ${name}\\([^]*?^}`, "m").exec(APP);
+    assert.ok(match, `exercise the real ${name}`); return match[0].replace(/^export /, "");
+  };
+  const enginesStart = APP.indexOf("const IMG_ENGINES = {");
+  const enginesEnd = APP.indexOf("\n};", enginesStart) + 3;
+  const changeStart = APP.indexOf('$("imgEngine").onchange = async () => {');
+  const changeEnd = APP.indexOf("\n};", changeStart) + 3;
+  const input = /^\$\("imgCfg"\)\.oninput = .*$/m.exec(APP)?.[0];
+  assert.ok(enginesStart > 0 && enginesEnd > enginesStart && changeStart > 0 && changeEnd > changeStart && input);
+  const mossStart = APP.indexOf("const IMG_MOSS_PRESETS = {");
+  const mossEnd = APP.indexOf("\nlet imgMossKey =", mossStart);
+  assert.ok(mossStart > 0 && mossEnd > mossStart, "exercise the real MOSS recipes and form state");
+  vm.runInContext([APP.slice(enginesStart, enginesEnd), APP.slice(mossStart, mossEnd), fn("imgMossRecipe"), fn("imgMossQuery"), fn("imgMossCheck"), fn("imgMossShape"), fn("imgEffectiveEngine"), fn("ckptSampling"),
+    fn("imgQwenShape"), fn("imgQwenQuery"), fn("imgRefsPaint"), fn("imgSampling"), APP.slice(changeStart, changeEnd), input].join("\n"), context);
+  return { $, labels, context, refs,
+    async engine(value) { $("imgEngine").value = value; await $("imgEngine").onchange(); },
+    cfg(value) { $("imgCfg").value = String(value); $("imgCfg").oninput(); },
+    negativeVisible() { return !$("imgNeg").parentElement.hidden && !labels.get("imgNeg").hidden; },
+  };
+}
+
+test("Pictures engine switches and repeated reference paints retain MOSS's real controls", async () => {
+  const form = imageControlsFixture(), { $, context } = form;
+  await form.engine("moss-image");
+  assert.equal(Number($("imgCfg").max), 10);
+  assert.equal(Number($("imgCfg").value), 2.5); assert.equal(Number($("imgSteps").value), 25);
+  assert.equal(form.negativeVisible(), true, "MOSS evaluates a negative above CFG 1");
+  assert.equal($("imgSampler").value, "er_sde"); assert.equal($("imgSched").value, "simple");
+  assert.equal($("imgSampler").disabled, true); assert.equal($("imgRefWrap").hidden, true);
+  assert.equal($("imgAdvToggle").parentElement.hidden, true);
+  $("imgNeg").value = "blur";
+  form.cfg(1);
+  assert.equal(form.negativeVisible(), false); assert.equal($("imgNeg").value, "", "no invisible negative reaches a CFG-1 request");
+  form.cfg(2.5);
+  assert.equal(form.negativeVisible(), true); assert.equal(Number($("imgCfg").max), 10);
+  context.imgRefsPaint(); context.imgRefsPaint();
+  assert.equal(form.negativeVisible(), true); assert.equal(Number($("imgCfg").max), 10, "later paints must not undo the engine choice");
+
+  await form.engine("qwen-image-2.1");
+  assert.equal(Number($("imgCfg").max), 10); assert.equal(form.negativeVisible(), false);
+  form.cfg(2); assert.equal(form.negativeVisible(), true);
+  await form.engine("checkpoint");
+  assert.equal(Number($("imgCfg").max), 15); assert.equal(form.negativeVisible(), true);
+  assert.equal($("imgAdvToggle").parentElement.hidden, false);
+  assert.equal($("imgSampler").disabled, false); assert.equal($("imgSched").disabled, false);
+  $("imgNeg").value = "blur";
+  await form.engine("flux2");
+  assert.equal(Number($("imgCfg").max), 15); assert.equal(form.negativeVisible(), false);
+  assert.equal($("imgNeg").value, "");
+  await form.engine("moss-image");
+  assert.equal(Number($("imgCfg").max), 10); assert.equal(form.negativeVisible(), true);
+});
+
+test("Pictures uses effective MOSS controls when its canonical transformer is picked", async () => {
+  const form = imageControlsFixture(), { $, context } = form;
+  $("imgCkpt").value = "moss_image_sft_int8_convrot.safetensors";
+  await form.engine("checkpoint");
+  form.cfg(2.5); context.imgRefsPaint();
+  assert.equal($("imgAdvToggle").parentElement.hidden, true); assert.equal($("imgAdv").hidden, true);
+  assert.equal($("imgSampler").value, "er_sde"); assert.equal($("imgSched").value, "simple");
+  assert.equal($("imgSampler").disabled, true); assert.equal($("imgSched").disabled, true);
+  assert.equal(Number($("imgCfg").max), 10); assert.equal(form.negativeVisible(), true);
+  form.cfg(1); context.imgRefsPaint();
+  assert.equal(Number($("imgCfg").max), 10); assert.equal(form.negativeVisible(), false);
+});
+
+test("Pictures fixed MOSS recipes lock their actual schedule and restore Standard and Qwen", async () => {
+  const form = imageControlsFixture(), { $, context } = form;
+  await form.engine("moss-image");
+  for (const [preset,steps,cfg,sampler] of [["spectrum-manual-h1",25,2.5,"er_sde"],["spectrum-adaptive-h2",25,2.5,"er_sde"],["turbo-4",4,1,"euler"],["dmd-8",8,1,"euler"]]) {
+    $("imgMossPreset").value = preset; $("imgNeg").value = "blur";
+    context.imgMossShape(true); await context.imgSampling(); context.imgQwenShape();
+    assert.equal(Number($("imgSteps").value),steps); assert.equal(Number($("imgCfg").value),cfg);
+    assert.equal($("imgSteps").disabled,true); assert.equal($("imgCfg").disabled,true);
+    assert.equal($("imgSampler").value,sampler); assert.equal($("imgSampler").disabled,true);
+    assert.equal(form.negativeVisible(),cfg>1); if(cfg===1) assert.equal($("imgNeg").value,"");
+    assert.equal(new URLSearchParams(context.imgMossKey).get("mossPreset"),preset);
+  }
+  $("imgMossPreset").value="standard"; context.imgMossShape(true); await context.imgSampling(); context.imgQwenShape();
+  assert.equal($("imgSteps").disabled,false); assert.equal($("imgCfg").disabled,false);
+  assert.equal(Number($("imgSteps").value),25); assert.equal(Number($("imgCfg").value),2.5);
+  await form.engine("qwen-image-2.1"); assert.equal($("imgMossRow").hidden,true); assert.equal($("imgSteps").disabled,false);
+  $("imgCkpt").value="moss_image_sft_int8_convrot.safetensors"; await form.engine("checkpoint");
+  $("imgMossPreset").value="turbo-4"; context.imgMossShape(true); await context.imgSampling(); context.imgQwenShape();
+  assert.equal($("imgMossRow").hidden,false); assert.equal($("imgSampler").value,"euler"); assert.equal($("imgSampler").disabled,true);
+  assert.equal(Number($("imgSteps").value),4); assert.equal(form.negativeVisible(),false);
+});
+
+
+test("Pictures readiness offers the selected Models addon or the exact Spectrum setup guide",async()=>{
+  const form=imageControlsFixture(),{$,context}=form,offered=[];
+  context.offerModel=value=>offered.push(value);await form.engine("moss-image");
+  context.fetch=async()=>({json:async()=>({ready:false,needsModel:"moss-image-turbo-4",error:"missing adapter"})});
+  $("imgMossPreset").value="turbo-4";await context.imgMossCheck(true);
+  assert.equal($("imgMossGet").hidden,false);$("imgMossGet").onclick();assert.equal(offered[0].needsModel,"moss-image-turbo-4");
+  context.fetch=async()=>({json:async()=>({ready:false,spectrum:{ready:false},error:"missing source"})});
+  $("imgMossPreset").value="spectrum-manual-h1";await context.imgMossCheck(true);
+  assert.equal($("imgMossGet").hidden,true);assert.equal($("imgMossSetup").hidden,false);
+  assert.match(HTML,/id="imgMossSetup"[^>]*MOSS_SPECTRUM_SETUP\.md/);
 });

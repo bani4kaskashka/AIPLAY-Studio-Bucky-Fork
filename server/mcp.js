@@ -67,6 +67,7 @@ import { avatarWardrobeTools } from "./mcp-avatar-wardrobe.js";
 import { avatarFittingTools } from "./mcp-avatar-fitting.js";
 import { videoLoraInput } from "./video-lora-validation.js";
 import { requireModelName } from "./localmodels.js";
+import { MOSS_PRESET_NAMES } from "./moss-presets.js";
 import { waitForArtJob, emptyResultNote } from "./art-wait.js";
 import { WHISPER_MODELS } from "./config.js";
 
@@ -2394,6 +2395,7 @@ export const TOOLS = [
               steps: { type: "integer" }, cfg: { type: "number" },
               count: { type: "integer" }, seconds: { type: "number" },
               dit: { type: "string" }, ditEngine: { type: "string" }, encoder: { type: "string" }, vae: { type: "string" },
+              mossPreset: { type: "string", enum: MOSS_PRESET_NAMES },
               quality: { type: "string", enum: ["default", "quality", "turbo"] }, persona: { type: "string" },
               refImages: { type: "array", maxItems: 10, items: { type: "string" }, description: "Ordered image filenames, plus any saved persona references (10 combined maximum)." },
               refSizing: { type: "string", enum: ["reference", "custom"] },
@@ -2738,7 +2740,7 @@ export const TOOLS = [
   {
     name: "make_image",
     description:
-      "Draw a picture. With no `engine` it uses the saved picture engine, or when nobody chose one the recommended picture model on this PC (studio_status `defaults`, key image.engine, says which and why; set_image_engine with use_for \"pictures\" saves one). Qwen Image 2.1's runtime and weights must be ready; check qwen_image_status. It runs only while "
+      "Draw a picture. With no `engine` it uses the saved picture engine, or when nobody chose one the recommended picture model on this PC (studio_status `defaults`, key image.engine, says which and why; set_image_engine with use_for \"pictures\" saves one). MOSS-Image is an optional text-only engine; check moss_image_status. Qwen Image 2.1's runtime and weights must be ready; check qwen_image_status. It runs only while "
       + "nothing else is generating — music always takes priority. Blocks until it is done.\n\n"
       + "Pass `ref_images` for Qwen Image 2.1 or FLUX.2 editing: the prompt refers to them as "
       + "\"image 1\", \"image 2\" in order — \"put the character from image 1 into the scene "
@@ -2792,8 +2794,8 @@ export const TOOLS = [
         width: { type: "integer" },
         height: { type: "integer" },
         seed: { type: "integer" },
-        engine: { type: "string", enum: ["qwen-image-2.1", "flux2", "zimage", "zimage-base", "anima", "ideogram4", "krea2", "checkpoint"],
-          description: "qwen-image-2.1: native INT8 Qwen Image 2.1, generation/editing, up to 10 refs, 25 steps at CFG 1, noncommercial research license. "
+        engine: { type: "string", enum: ["qwen-image-2.1", "moss-image", "flux2", "zimage", "zimage-base", "anima", "ideogram4", "krea2", "checkpoint"],
+          description: "moss-image: experimental native MOSS-Image SFT text-to-image, Apache-2.0, 25 steps, CFG 2.5, er_sde/simple; no refs, personas, editing, transparency or Fast draft. Check moss_image_status. qwen-image-2.1: native INT8 Qwen Image 2.1, generation/editing, up to 10 refs, 25 steps at CFG 1, noncommercial research license. "
             + "flux2: FLUX.2 klein 4B, Apache-2.0, 4 steps, also takes ref_images. "
             + "zimage: Z-Image Turbo, Apache-2.0, 8 steps — photographic realism, faces, English and Chinese "
             + "prompts, and the cleanest commercial answer in the app; NO negative (distilled at cfg 1.0, so "
@@ -2803,9 +2805,10 @@ export const TOOLS = [
             + "composition. ideogram4: the open Ideogram release — typography/posters; NON-COMMERCIAL licence "
             + "whose text is gated and unread; preset via quality. checkpoint: any .safetensors in "
             + "ComfyUI/models/checkpoints (list_checkpoints shows the shelf) — negative/cfg apply." },
+        moss_preset: { type: "string", enum: MOSS_PRESET_NAMES, description: "MOSS only. Standard keeps the native 25-step defaults; Spectrum fixes 25/CFG2.5/er_sde/simple and requires the pinned standalone node. Turbo4 and DMD8 fix 4 or 8 steps/CFG1/euler/simple. Kromoss Standard uses its pinned INT8 checkpoint at 25 steps/CFG 2.5/er_sde/simple; Kromoss DMD2 fixes 8 steps/CFG 1/euler/simple with its own adapter. MOSS HiRes v0.3 fixes 25 steps/CFG 4/er_sde/simple, exactly 2048x2048 and one image with native VAE decode; its publisher supplied no explicit adapter licence. NSFW Uncensored uses its optional pinned native LoRA at 0.7, 30 steps/CFG 3/er_sde/simple; begin the prompt with moss_xvstyle yourself. INT8 adapters use native requantization, not publisher BF16-equivalent precision. Check moss_image_status with the same preset. No custom stacks." },
         quality: { type: "string", enum: ["default", "quality"], description: "ideogram4 only: Default 20 steps or Quality 48." },
         checkpoint: { type: "string", description: "checkpoint engine only: the model filename, from models/checkpoints OR models/diffusion_models (list_checkpoints shows both shelves and says which loader each needs). A bare transformer — Z-Image, Anima, FLUX.2, Krea 2 — renders on its own family's recipe with this file in place of the catalogue's." },
-        dit_engine: { type: "string", enum: ["auto", "qwen-image-2.1", "zimage", "anima", "flux2", "krea2", "checkpoint"],
+        dit_engine: { type: "string", enum: ["auto", "qwen-image-2.1", "moss-image", "zimage", "anima", "flux2", "krea2", "checkpoint"],
           description: "checkpoint engine only, default auto: what the picked file IS. Detection reads the architecture from the tensors and is right for every file measured here; name one of these only to overrule it." },
         encoder: { type: "string", description: "Optional compatible text-encoder filename from models/text_encoders for a native Qwen or other bare-transformer image engine, including checkpoint picks resolved to that family. Defaults to the family's own; Qwen requires its 2.1 encoder architecture." },
         vae: { type: "string", description: "Optional compatible VAE filename from models/vae for native Qwen or another bare-transformer image engine. Defaults to the family's own; Qwen requires its 2.1 VAE architecture." },
@@ -2838,7 +2841,7 @@ export const TOOLS = [
           description: "SD checkpoint schedule, default karras (also normal, simple, sgm_uniform, exponential, beta, ddim_uniform). Qwen 2.1 accepts only simple (its default)." },
         steps: { type: "integer",
           description: "Optional, and worth setting on a checkpoint. Omit and you get that engine's own "
-            + "default: 25 qwen-image-2.1 (max 50), 4 flux2, 8 zimage, 25 zimage-base, 28 checkpoint (ideogram4 takes its steps from "
+            + "default: 25 moss-image or qwen-image-2.1 (max 50), 4 flux2, 8 zimage, 25 zimage-base, 28 checkpoint (ideogram4 takes its steps from "
             + "`quality` instead and ignores this). 4 is right for DISTILLED FLUX.2 klein and roughly six "
             + "times too few for an SDXL checkpoint, which wants about 20-30 — that mismatch is the reason "
             + "this parameter exists. Clamped by the route: 60 max on checkpoint, 50 on the two Z-Image "
@@ -2860,7 +2863,7 @@ export const TOOLS = [
          * image.engine). Posting Qwen here aimed a FLUX-only install at files
          * it never downloaded. */
         ...(a.engine ? { engine: a.engine } : {}), quality: a.quality, checkpoint: a.checkpoint,
-        negative: a.negative, cfg: a.cfg,
+        negative: a.negative, cfg: a.cfg, mossPreset: a.moss_preset,
         refSizing: a.ref_sizing, refResolution: a.ref_resolution, transparent: a.transparent, refAlpha: a.ref_alpha,
         /* Fast draft. Sent only when given, so the route's own default (off)
          * decides otherwise; the route refuses it off Qwen with a sentence. */
@@ -2926,6 +2929,7 @@ export const TOOLS = [
         ...(r.prompt ? { prompt: r.prompt, prompt_choices: r.promptChoices, combinations: r.combinations } : {}),
         seed: r.seed,
         ...(r.draft ? { draft: true } : {}),
+        ...(r.mossPreset ? { moss_preset: r.mossPreset, moss_recipe: r.mossRecipe } : {}),
         ...(r.note ? { note: r.note } : {}),
         /* Reached with its OWN failure already thrown by the wait, so never "the
          * last error": that is the queue's, a stranger's. art-wait.js says why. */
@@ -3050,6 +3054,7 @@ export const TOOLS = [
       "Choose a picture engine persistently: for covers (the default), for pictures (the Pictures screen's engine, and make_image or a music video's stills with no engine named), or both, with `use_for`. "
       + "\"auto\" forgets the choice, so Studio picks from what is on this PC again. make_image still takes its own `engine` per picture. "
       + "qwen-image-2.1 supports references, 25 steps at CFG 1, and requires a compatible runtime and native files. "
+      + "moss-image: experimental MOSS-Image SFT, text only; no references or editing. Check moss_image_status. "
       + "With no saved choice, covers use the recommended picture model on this PC, and none are queued while no picture model is there (studio_status `defaults`, key art.engine); a saved choice always wins. flux2: FLUX.2 klein, Apache-2.0, also takes references. "
       + "zimage / zimage-base: Z-Image, Apache-2.0, photographic; base honours a negative prompt. "
       + "anima: anime and illustration. "
@@ -3061,7 +3066,7 @@ export const TOOLS = [
       type: "object",
       required: ["engine"],
       properties: {
-        engine: { type: "string", enum: ["auto", "qwen-image-2.1", "flux2", "zimage", "zimage-base", "anima", "ideogram4", "krea2", "checkpoint"] },
+        engine: { type: "string", enum: ["auto", "qwen-image-2.1", "moss-image", "flux2", "zimage", "zimage-base", "anima", "ideogram4", "krea2", "checkpoint"] },
         checkpoint: { type: "string", description: "With engine \"checkpoint\": the file name to paint with (covers only; a picture's own file is picked per picture)." },
         use_for: { type: "string", enum: ["covers", "pictures", "both"],
           description: "covers (default): the engine that paints song covers. pictures: the Pictures screen's engine, used by make_image and music-video stills when they name none; kept even when its files are missing (make_image then says what to download). both." },
@@ -3135,13 +3140,15 @@ export const TOOLS = [
         seconds: { type: "integer", description: "Direct clip length, 1–20 s (default 5). H3 is trained for about 4–15 s; longer requests are experimental. More than 20 s is clamped and reported in warnings. Continue a clip for more output." },
         width: { type: "integer", description: "Frame width. Use a size the engine is trained on — see studio_status / the Video page list. H3 native is 1344x768." },
         height: { type: "integer", description: "Frame height." },
+        model_file: { type: "string", description: "Optional named video checkpoint from the installed Video model picker. Validated for this engine before check or render; omitted uses the saved/default selection." },
         first_frame: { type: "string", description: "An image name to open on (from list_images or a cover). Pinned at frame 0." },
         last_frame: { type: "string", description: "An image name to end on, pinned at the final frame. Ignored when `loop` is set." },
         /* ⚠ VIDEO-TO-VIDEO. A whole clip where a single opening picture goes.
          * The door refuses this with the catalogue row and `download_model`
          * named in the refusal when the patch is absent, so an assistant can
          * offer the download instead of reporting an unsupported option. */
-        source_video: { type: "string", description: "H3 ONLY — drive the whole render with an existing clip (a name from list_clips) instead of one opening picture: its motion and blocking are kept while the prompt restyles it, which is how live footage becomes another look. Needs the H3 Fun ControlNet patch (2.3 GB, catalogue id videoH3FunControl); without it the render is refused with that id and the tool to fetch it, rather than quietly ignoring the clip. The patch is a derivative of H3 and carries H3's territory clause." },
+        source_video: { type: "string", description: "H3 ONLY: an existing video name from list_clips to guide the render's motion and layout. Studio validates and conforms the source, then extracts depth or pose before rendering. This is structural guidance, not source-pixel or identity preservation. Needs the H3 Fun ControlNet patch (catalogue videoH3FunControl) and the selected preprocessing weights. Missing dependencies are reported before rendering." },
+        control_mode: { type: "string", enum: ["depth", "pose", "prepared"], description: "Source-video guidance: depth (default, Depth Anything V2 Small), pose (TorchScript DWPose), or prepared (the source is already a control map; no estimator). Prepared is for authored control videos, not ordinary RGB footage." },
         control_strength: { type: "number", description: "How hard the source clip steers the render, 0 to 2. Default 1. Lower follows the prompt more and the footage less." },
         control_start: { type: "number", description: "Fraction of the sampling run where the control begins, 0 to 1. Default 0." },
         control_end: { type: "number", description: "Fraction where it stops, 0 to 1. Default 1. Ending early lets the model finish freely, which loosens the copy." },
@@ -3298,9 +3305,12 @@ export const TOOLS = [
        * ignoring the footage. The route reads `sourceVideo`. */
       if (a.source_video) {
         body.sourceVideo = safeName(a.source_video, "clip");
-        if (Number.isFinite(a.control_strength)) body.controlStrength = a.control_strength;
-        if (Number.isFinite(a.control_start)) body.controlStart = a.control_start;
-        if (Number.isFinite(a.control_end)) body.controlEnd = a.control_end;
+      }
+      if (a.model_file !== undefined) body.modelFile = a.model_file;
+      // The common validator must see invalid or orphaned options too.
+      for (const [input, field] of [["control_mode", "controlMode"], ["control_strength", "controlStrength"],
+        ["control_start", "controlStart"], ["control_end", "controlEnd"]]) {
+        if (a[input] !== undefined) body[field] = a[input];
       }
       if (a.first_frame) body.fromCover = safeName(a.first_frame, "image");
       // Same field naming trap as fromCover: the route reads toCover/midUploads.
@@ -3341,6 +3351,8 @@ export const TOOLS = [
           character: c.character?.receipt ?? null,
           character_hint: c.character?.hint ?? null,
           sampler: c.sampler ?? null,
+          video_control: c.videoControl ?? null,
+          model_file: c.videoModels?.dit ?? null,
           /* What the song under the clip does on this engine (video-plain.js
            * songUnderSay): lip-sync on H3 with pictures, not on LTX. */
           soundtrack: c.songLine?.hint ?? null,
@@ -3354,11 +3366,13 @@ export const TOOLS = [
       const made = madeRows.map((c) => c.name);
       const checkpoint_receipts = Object.fromEntries(madeRows.filter((c) => c.meta?.h3Checkpoint)
         .map((c) => [c.name, c.meta.h3Checkpoint]));
+      const video_control_receipts = Object.fromEntries(madeRows.filter((c) => c.meta?.videoControl)
+        .map((c) => [c.name, c.meta.videoControl]));
       /* What the render changed from the request, and the RAM warning: the
        * door's own sentences (video-plain.js), the ones the page shows. */
       const warnings = (r.warnings || []).map((w) => w.text).filter(Boolean);
       // Its own failure has already thrown; see emptyResultNote in art-wait.js.
-      return { clips: made, checkpoint_receipts, note: made.length ? undefined : emptyResultNote(settled, r.job?.id, "list_clips"),
+      return { clips: made, checkpoint_receipts, video_control_receipts, note: made.length ? undefined : emptyResultNote(settled, r.job?.id, "list_clips"),
         ...(warnings.length ? { warnings } : {}),
         ...(r.character ? { character: r.character.receipt, character_hint: r.character.hint ?? undefined } : {}) };
     },
@@ -3366,19 +3380,34 @@ export const TOOLS = [
 
   {
     name: "list_clips",
-    description: "Every clip and imported media file, newest first, with what made it. h3_checkpoint is the saved checkpoint receipt (requestedBuild, ranBuild, file, reference, fallback), or null for clips without one.",
+    description: "Clips and imported media, newest first, with starred favorites and what made each file. Set starred_only for favorites. h3_checkpoint is the saved checkpoint receipt (requestedBuild, ranBuild, file, reference, fallback), or null for clips without one.",
     inputSchema: {
       type: "object",
-      properties: { limit: { type: "integer" } },
+      properties: { limit: { type: "integer" }, starred_only: { type: "boolean", description: "Return only starred favorites, before applying the limit." } },
       additionalProperties: false,
     },
     async run(a) {
       const d = await api("GET", "/api/clips");
-      return (d.clips || []).slice(0, Math.max(1, Number(a.limit) || 40)).map((c) => ({
-        name: c.name, track: c.track, seconds: c.meta?.clipSeconds ?? null,
+      if (d.error) throw new Error(d.error);
+      return (d.clips || []).filter((c) => !a.starred_only || c.starred === true)
+        .slice(0, Math.max(1, Number(a.limit) || 40)).map((c) => ({
+        name: c.name, starred:c.starred === true, track: c.track, seconds: c.meta?.clipSeconds ?? null,
         source: c.meta?.source ?? "generated", prompt: c.meta?.prompt ?? null,
         h3_checkpoint: c.meta?.h3Checkpoint ?? null,
+        video_control: c.meta?.videoControl ?? null,
       }));
+    },
+  },
+
+  {
+    name: "clip_favorite",
+    description: "Star or unstar an existing library clip or imported media file. Saves a personal favorite without changing the media or its generation metadata.",
+    inputSchema: { type:"object",required:["name","starred"],properties:{name:{type:"string"},starred:{type:"boolean"}},additionalProperties:false },
+    async run(a) {
+      if (typeof a.starred !== 'boolean') throw new Error('starred must be true or false.');
+      const r = await api('POST','/api/clips',{action:'flag',flag:'starred',name:safeName(a.name,'clip'),value:a.starred});
+      if (r.error) throw new Error(r.error);
+      return {name:r.name,starred:r.starred};
     },
   },
 

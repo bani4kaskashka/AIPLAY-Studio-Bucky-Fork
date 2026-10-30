@@ -243,8 +243,13 @@ export function blankProject(name, opts = {}) {
      * has no `stereo` key, migrate leaves it that way, and its cached regions
      * and pinned bounces survive an engine commit. An old project opts in
      * with mixer_set target=master stereo=true (every region re-renders).
+     * `outputMode: transparent` gives new projects unity post-master output.
+     * Missing mode in a saved document keeps the original soft clip.
      * `target_lufs` is absent: a bounce aims at a loudness only when asked. */
-    master: { inserts: [], fader: 0, stereo: true },
+    master: { inserts: [], fader: 0, stereo: true, outputMode: "transparent" },
+    /* New songs open on the bottom mixer with the browser/device dock folded.
+     * Normalize into fresh nested objects; legacy migration keeps its old view. */
+    view: normalizeView({ ...VIEW_PRESET_VALUES.deck, preset: "deck" }),
     /* Every mutation appends here with its author — `by: "agent" | "user"` —
      * the dual-control ledger §13a asks for. Stored, shown nowhere yet. */
     ledger: [],

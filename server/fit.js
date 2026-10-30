@@ -32,7 +32,8 @@
  * that struggles.
  */
 import path from "node:path";
-import { CATALOG, MODEL_TO_CAPABILITY, isPictureModel, rightsRank } from "./models.js";
+import { workflowEvidenceKey, curatedArtifactKey } from './engine/workflow-evidence.js';
+import { CATALOG, MODEL_TO_CAPABILITY, musicCapabilityFor, isPictureModel, rightsRank } from "./models.js";
 import { config, prefChosen, prefOrigin } from "./config.js";
 import { SETTING_WORDS } from "./lrc.js";
 import {
@@ -328,7 +329,7 @@ function h3Fit(req, machine) {
  * measured this at its most extreme — the same 25-step picture took 41 s with
  * 16 GB of RAM free and was still going after 13 minutes with 3.8 GB free.
  */
-export function fitFor(requires, machine) {
+export function fitFor(requires, machine, context = {}) {
   const req = requires || {};
   if (req.nvidiaOnly && (machine.gpu?.vendor && machine.gpu.vendor !== "nvidia")) return {
     state: "wont-run", why: "This optional build requires NVIDIA CUDA; use the ordinary H3 build on this card.",
@@ -337,6 +338,29 @@ export function fitFor(requires, machine) {
     yourVramGb: machine.gpu?.vramGb ?? null, yourRamGb: machine.ram.totalGb,
   };
   if (req.h3Tiers) return h3Fit(req, machine);
+  // This is an exact historical reference, not a VRAM/RAM floor. Generic
+  // catalogue fit calls have no workload identity and cannot inherit it.
+  const accepted = req.hardwareAcceptance, tested = accepted?.tested;
+  const referenceMatches = accepted && context.target === tested.target
+    && context.graph && curatedArtifactKey(context.graph)?.key === accepted.artifactKey
+    && workflowEvidenceKey(context.graph) === accepted.workflowKey
+    && Object.values(context.graph).some(n => n.class_type === 'TextEncodeAceStepAudio1.5' && n.inputs.lyrics === '')
+    && machine.gpu?.id === tested.gpuId && machine.gpu?.count === tested.gpuCount
+    && machine.gpu?.vramGb === tested.vramGiB
+    && (machine.cloud === tested.cloud || machine.secureCloud === true);
+  if (referenceMatches) {
+    const allocationMatches = machine.cloud === tested.cloud
+      && machine.ram?.totalGb === tested.allocatedRamGB && machine.vcpuCount === tested.vcpus;
+    const runtimeMatches = machine.image === tested.image && Object.entries(accepted.runtime)
+      .every(([key, value]) => machine.runtime?.[key] === value);
+    const verified = allocationMatches && runtimeMatches;
+    return { state: verified ? 'fits' : 'unknown', recommendable: !!verified,
+      why: verified ? 'Matches the hardware-tested A100 configuration and workload.' : 'A100 workflow tested; verify the Secure allocation and runtime before use.',
+      hardwareValidation: { state: verified ? 'validated' : 'candidate', evidenceId: accepted.id,
+        historicalHardwareValidated: true, allocationMatches, runtimeMatches, minimumRequirementsEstablished: false },
+      needVramGb: null, recVramGb: null, needRamGb: null, recRamGb: null,
+      yourVramGb: machine.gpu.vramGb, yourRamGb: machine.ram?.totalGb ?? null };
+  }
   if (req.experimental) return {state:"unknown",why:req.experimentalWhy || "Experimental native build: a minimum hardware floor has not been established.",
     note:req.note||null,needVramGb:null,recVramGb:null,needRamGb:null,recRamGb:null,
     yourVramGb:machine.gpu?.vramGb??null,yourRamGb:machine.ram.totalGb};
@@ -569,7 +593,7 @@ function musicFromCaps(capabilities, machine) {
   }
   const byId = new Map((capabilities || []).map((c) => [c.id, c]));
   const choices = Object.keys(config.music.engines || {}).map((engine) => {
-    const cap = byId.get(MODEL_TO_CAPABILITY[engine]);
+    const cap = byId.get(musicCapabilityFor(engine));
     if (!cap) return null;
     return {
       engine, available: !!cap.ready, label: String(cap.label || engine).split("—").pop().trim(),
@@ -648,7 +672,7 @@ export function recommendFor({ capabilities, machine, disk, music = null } = {})
    * selected music engine". */
   const musicPick = music || musicFromCaps(capabilities, machine);
   const mine = musicPick.chosenBy === "you";
-  for (const id of [MODEL_TO_CAPABILITY[musicPick.value] || MUSIC_IDS[0]]) {
+  for (const id of [musicCapabilityFor(musicPick.value) || MUSIC_IDS[0]]) {
     const e = withFit(id);
     if (!e) continue;
     picks.push({
@@ -792,24 +816,23 @@ export function recommendFor({ capabilities, machine, disk, music = null } = {})
     });
   }
 
-  /* The gated one is reported whatever happens — as the better option somebody
-   * with the hardware may want to go and get by hand, or as the explanation for
-   * why the fast engine is not being offered. Never as a pick. */
+  /* Publisher-gated models are optional extras, never an unfinished step in
+   * the recommended install. Their account setup belongs in Models. */
   for (const g of gatedOnes) {
     notes.push({
-      slot: "video-gated", id: g.cap.id, label: g.cap.label, fit: g.fit,
+      slot: "video-gated", id: g.cap.id, label: g.cap.label, fit: g.fit, optional: true,
       headline: g.fit.state === "wont-run"
-        ? `${g.cap.label} would not run on this machine anyway.`
-        : `${g.cap.label} would run here, and Studio cannot download it for you.`,
-      detail: `${g.fit.why} Its repository is access-gated: the built-in downloader has no token and `
-            + `deliberately no place to keep one. ${g.cap.gated.how}`,
+        ? `Optional ${g.cap.label}: more hardware needed.`
+        : `Optional ${g.cap.label}: publisher access required.`,
+      detail: `${g.fit.why} ${g.cap.gated.how}`,
       how: g.cap.gated.how,
       url: g.cap.gated.url || null,
     });
   }
 
   /* ── images: fit first, then the least restrictive licence ───────────── */
-  const images = IMAGE_IDS.map(withFit).filter(Boolean);
+  // Optional MOSS remains an explicit experiment, including recommendation cards.
+  const images = IMAGE_IDS.filter(id => id !== "moss-image").map(withFit).filter(Boolean);
   const usableImages = images.filter((i) => i.fit.state !== "wont-run").sort(rank);
   if (usableImages.length) {
     const best = usableImages[0];
@@ -957,7 +980,8 @@ function pictureDefault({ saved = null, kept = false, capabilities = [], machine
     return { key, value: saved, chosenBy: "you", kept: !!kept, ready, label,
       why: `${saidBy(kept)} ${label} for pictures${ready ? "." : ", and it is not on this PC. The Models screen has it; Studio does not switch for you."}` };
   }
-  const rows = pictureRows(capabilities, machine);
+  // MOSS is an explicit experimental choice until a local comparison is complete.
+  const rows = pictureRows(capabilities, machine).filter(r => r.engine !== "moss-image");
   /* Qwen is Studio's main image model when its files are present. The generic
    * recommendation ranking prefers Apache-2.0 FLUX.2 even beside a ready Qwen,
    * which silently changed the Pictures/MCP default despite the selected Qwen

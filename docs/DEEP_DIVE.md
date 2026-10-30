@@ -1594,10 +1594,26 @@ none of them carries a key:
 | `AIPLAY_FAL_BASE`, `AIPLAY_MINIMAX_BASE` | where hosted-music requests go, for a local mock or a relay you run; your key goes there too, so point them only at something you control |
 | `AIPLAY_APPDATA` | where settings and `secrets.json` live (tests use it to stay off your real profile) |
 
-The one credential Studio's own code reads from outside itself is Hugging Face's
-login for the gated LTX 2.5 download: `scripts/fetch_ltx25.py`, which you run by
-hand after `hf auth login`, asks `huggingface_hub` for the token that login
-stored. It downloads, it bills nothing, and nothing in the running Studio uses it.
+Optional LTX 2.5 setup lives in **Models → Set up LTX**. Approve access on the
+publisher's Hugging Face page, sign in through Studio's browser button, then install.
+The public desktop client uses PKCE and requests only `gated-repos`; it does not
+request private repository access or a distributed client secret. Its public
+client metadata is served by this repository's existing GitHub Pages site.
+Studio keeps the resulting OAuth credentials in its existing protected secret
+store, separately from any manually entered read token. It shows whether the
+credential is protected by Windows DPAPI or by file permissions. A token saved by
+another Studio copy is identified before reuse. It is never returned to the
+browser or put in settings, download URLs, logs or project files. If the grant
+includes a refresh token, Studio refreshes only during an explicit access check
+or install; opening Models never contacts the OAuth provider. Without a usable
+refresh grant, expiry asks for sign-in again. Disconnect clears the local grant;
+it does not claim to revoke the app on Hugging Face.
+
+The installer uses the configured model folders and the catalogue's pinned
+files, with resumable downloads and checksum verification. It does not read
+another program's Hugging Face login or environment credentials. The separate
+`scripts/fetch_ltx25.py` remains a developer fallback using Hugging Face's own
+login cache; normal Studio installation does not require it or a terminal.
 
 ## Settings that are not up for negotiation
 
@@ -1686,7 +1702,8 @@ tool list from the live server, so the two cannot drift.
 | `list_fonts` | the system TTF/OTF shelf for the type tool |
 | `list_checkpoints` | the bring-your-own-model shelf |
 | `set_video_engine` | pick LTX or H3, persistently — a decision, not a detail |
-| `make_clip` / `list_clips` | render a clip; each engine's inputs are typed and mismatches are refused with the fix |
+| `make_clip` / `list_clips` | render a clip; list saved clips with `starred` favorites and optional `starred_only` filtering; engine mismatches are refused with the fix |
+| `clip_favorite` | star or unstar an existing clip without changing its media or generation metadata; favorites persist in Studio's data folder |
 | `restyle_clip` | keep a clip's motion, restyle its look, driven by a song's bass |
 | `build_music_video` | lay clips onto the bar lines and write a Studio project |
 | `list_projects` | saved Studio projects |

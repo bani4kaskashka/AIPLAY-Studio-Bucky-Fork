@@ -43,8 +43,10 @@ import { resizeNoteDurations } from "./daw-editing.js";
 import { EXPORT_PRESETS, exportSettings, exportFacts, exportDownloadUrl } from "./daw-export.js";
 import { audioResultDetails, stemResultDetails } from "./daw-audio-results.js";
 import { initDawPlugins } from "./daw-plugins.js";
+import { mountToolbarMenus } from "./daw-toolbar.js";
 
 const $ = (id) => document.getElementById(id);
+mountToolbarMenus(document.querySelector(".d-bar"));
 /* Every name here can come from outside Studio: a track named after an
  * imported file, a pack's licence fields, MCP and the chat agent. Escaped
  * wherever it lands in HTML (security review, 2026-10-12). */
@@ -2530,7 +2532,7 @@ $("ghostChk").addEventListener("change", draw);
  * the same caveat as the keymap and the track colours). */
 $("audChk").addEventListener("change", () => {
   S.aud.on = $("audChk").checked;
-  if (!S.aud.on) auditionStop();
+  if (!S.aud.on) { ++S.aud.seq; auditionStop(); stopHeldAuditions(); }
   try { localStorage.setItem("daw.audition", S.aud.on ? "1" : "0"); } catch { /* private mode */ }
   status(S.aud.on
     ? "note auditioning on: a click, a drawn note or a vertical drag plays through this track's patch (an audition render: a server round trip, tens of ms)"
@@ -3868,6 +3870,24 @@ function strip(kind, host) {
     btns.appendChild(tl);
   }
   el.appendChild(btns);
+  if (kind === "master") {
+    const output = document.createElement("select");
+    output.className = "d-sel d-output-mode";
+    output.setAttribute("aria-label", "Master output");
+    output.title = "Clean leaves output at unity; Soft clip applies saturation.";
+    const current = host.outputMode === "transparent" ? "transparent" : "legacySoftClip";
+    for (const [value, label] of [["transparent", "Clean"], ["legacySoftClip", "Soft clip"]]) {
+      const option = document.createElement("option");
+      option.value = value; option.textContent = label;
+      output.appendChild(option);
+    }
+    output.value = current;
+    output.addEventListener("change", () => act(
+      { action: "mixer_set", slug: S.slug, target: "master", output_mode: output.value },
+      { action: "mixer_set", slug: S.slug, target: "master", output_mode: current },
+      `master output ${output.value === "transparent" ? "clean" : "soft clip"}`));
+    el.appendChild(output);
+  }
   return el;
 }
 
@@ -4154,6 +4174,7 @@ const deferredNote = (name) =>
 /* ── the dock's three tabs ───────────────────────────────────────────── */
 
 let passageDock = null;
+let assistantDock = null;
 let passageDockSized = false;
 function showDock(tab) {
   S.ana.tab = tab;
@@ -5491,6 +5512,7 @@ async function play(anchorAt) {
 }
 
 function stop() {
+  stopHeldAuditions();
   S.at = projTime();
   S.playing = false;
   S.ticker?.stop();
@@ -5869,13 +5891,35 @@ function drawKnobs() {
 function knobControl(t, pname, pspec) {
   const wrap = document.createElement("div");
   wrap.className = "d-param";
+  const choices = Object.entries(pspec.choices || {}).filter(([value]) => Number.isFinite(Number(value)));
+  if (choices.length) {
+    wrap.classList.add("d-wide");
+    const label = document.createElement("label");
+    label.className = "d-plab";
+    label.textContent = pspec.label || pname.replace(/_/g, " ");
+    const select = document.createElement("select");
+    select.className = "d-sel";
+    select.id = `patch-choice-${t.id}-${pname}`;
+    label.htmlFor = select.id;
+    select.setAttribute("aria-label", label.textContent);
+    select.title = pspec.doc || "";
+    for (const [value, caption] of choices) select.add(new Option(caption, value));
+    select.value = String(t.instrument?.params?.[pname] ?? pspec.default);
+    select.addEventListener("change", () => setTrackParams(t, { [pname]: Number(select.value) }, `${t.name} ${pname}`));
+    wrap.append(label, select);
+    return wrap;
+  }
   /* One integer-valued knob exists (the lead's unison count); an integer
    * range under two dozen wide with a unit of nothing is stepped whole. */
-  const whole = pspec.unit === "" && pspec.max - pspec.min > 1 && pspec.max - pspec.min < 24
-    && [pspec.min, pspec.max, pspec.default].every(Number.isInteger);
+  const declaredStep = Number(pspec.step);
+  const whole = declaredStep > 0 ? Number.isInteger(declaredStep) : (pspec.unit === "" && pspec.max - pspec.min > 1 && pspec.max - pspec.min < 24
+    && [pspec.min, pspec.max, pspec.default].every(Number.isInteger));
+  const snap = (x) => declaredStep > 0
+    ? Math.max(pspec.min, Math.min(pspec.max, pspec.min + Math.round((x - pspec.min) / declaredStep) * declaredStep))
+    : whole ? Math.round(x) : x;
   const lab = document.createElement("div");
   lab.className = "d-plab";
-  lab.textContent = pname.replace(/_/g, " ");
+  lab.textContent = pspec.label || pname.replace(/_/g, " ");
   lab.title = `${pname} ${pspec.min}..${pspec.max} (default ${pspec.default}${pspec.unit ? ` ${pspec.unit}` : ""})`
     + `: ${pspec.doc || ""} Drag vertically; shift = fine; double-click = default. Writes set_track params.`;
   const v = Number(t.instrument?.params?.[pname] ?? pspec.default);
@@ -5902,14 +5946,14 @@ function knobControl(t, pname, pspec) {
     const step = (pspec.max - pspec.min) / (e.shiftKey ? 900 : 180);
     drag.cur = Math.max(pspec.min, Math.min(pspec.max, drag.cur - (e.clientY - drag.y) * step));
     drag.y = e.clientY;
-    paint(whole ? Math.round(drag.cur) : drag.cur);
+    paint(snap(drag.cur));
   });
   k.addEventListener("pointerup", async (e) => {
     const d = drag; drag = null;
     S.dragging = false;
     if (!d) return;
     releasePointer(k, e.pointerId);
-    const nv = whole ? Math.round(d.cur) : d.cur;
+    const nv = snap(d.cur);
     if (nv === v) { paint(v); return; }
     await setTrackParams(t, { [pname]: nv }, `${t.name} ${pname} → ${show(nv)}`);
   });
@@ -5933,7 +5977,7 @@ function setTrackParams(t, patch, label) {
 function selectTrack(id) {
   if (S.historyBusy || S.editBusy) return;
   const changed = S.trackId !== id;
-  if (changed) cancelNoteGesture();
+  if (changed) { cancelNoteGesture(); stopHeldAuditions(); }
   S.trackId = id;
   S.sel.clear();
   S.devTarget = { kind: "track", id };
@@ -5974,6 +6018,7 @@ async function refreshDoc(session = captureSession()) {
   catch (err) { if (!sessionCurrent(session) || read !== S.docRead) return false; throw err; }
   if (!sessionCurrent(session) || read !== S.docRead) return false;
   cancelNoteGesture();
+  const auditionScope = heldAuditionScope();
   S.proj = r.project;
   S.timeline = r.timeline;
   S.totalSeconds = r.totalSeconds;
@@ -5984,6 +6029,7 @@ async function refreshDoc(session = captureSession()) {
   S.view = S.proj.view || null;
   applyViewFromDoc();
   if (!S.proj.tracks.some((t) => t.id === S.trackId)) S.trackId = S.proj.tracks[0]?.id ?? null;
+  if (auditionScope !== heldAuditionScope()) stopHeldAuditions();
   if (!S.devTarget) S.devTarget = S.trackId ? { kind: "track", id: S.trackId } : { kind: "master", id: "master" };
   S.lanes = S.lanes.filter((k) => laneRef(k));
   $("lenBars").value = S.proj.lengthBars;
@@ -5996,6 +6042,7 @@ async function refreshDoc(session = captureSession()) {
   paintSelInfo();
   if (S.rollFit) fitRoll();
   passageDock?.contextChanged();
+  assistantDock?.refresh();
   return true;
 }
 /** Set the loop without restarting the transport (used while re-reading). */
@@ -6338,10 +6385,10 @@ async function auditionTake(k) {
  * `preview_note` renders ONE note through the track's real patch — the
  * same instrument stage the mix uses, so what you hear is what will be
  * printed — and answers a wav url. It is a SERVER ROUND TRIP: tens of
- * milliseconds, not low-latency monitoring. The UI says so rather than
- * implying a keyboard.
+ * milliseconds, not low-latency monitoring. Held MIDI notes use a separate,
+ * bounded voice pool below; editor clicks and drags keep this path.
  *
- * Everything below exists to keep that from becoming annoying, which is
+ * The editor's single-voice path keeps that from becoming annoying, which is
  * the only reason auditioning gets switched off in other editors:
  *
  *   ONE VOICE      a new audition stops the one still ringing, so dragging
@@ -6417,9 +6464,108 @@ function auditionDrag(pitch, vel, durTicks) {
   auditionNote(pitch, vel, durTicks);
 }
 
-/* the piano-key gutter and MIDI input both audition too — one path, so
- * the toggle, the cancellation and the cache cover all three. */
+/* The piano-key gutter keeps the editor's click audition. Held MIDI voices
+ * below share its toggle and decode cache, but not its single-voice slot. */
 function previewPitch(pitch) { auditionNote(pitch); }
+
+/* Held MIDI auditions are finite rendered files, not a live synth. Key release
+ * fades the playing file; it does not re-render the patch's release envelope.
+ * No CC, pedal or pressure interpretation is added here. */
+function createAuditionVoices({ render, start, isCurrent, limit = 16 }) {
+  const voices = new Map();
+  function release(key) {
+    const voice = voices.get(key); if (!voice) return;
+    voices.delete(key); voice.released = true; voice.node?.release();
+  }
+  function clear() {
+    const old = [...voices.values()]; voices.clear();
+    for (const voice of old) { voice.released = true; voice.node?.stop(); }
+  }
+  async function noteOn(key, note) {
+    release(key);
+    while (voices.size >= limit) release(voices.keys().next().value);
+    const voice = { note, node: null, released: false }; voices.set(key, voice);
+    const valid = () => voices.get(key) === voice && !voice.released && isCurrent(note);
+    const ended = () => { if (voices.get(key) === voice) voices.delete(key); };
+    try {
+      const buffer = await render(note, valid); if (!valid()) { ended(); return; }
+      const node = await start(buffer, valid, ended);
+      if (!valid()) { node?.stop(); ended(); return; }
+      if (!node) { ended(); return; }
+      voice.node = node;
+    } catch { ended(); /* a failed preview is silence, never a document edit */ }
+  }
+  return { noteOn, release, clear };
+}
+
+/** Preview routing uses the same first tempo/meter row as preview_note. */
+function heldPreviewTicks(row = {}, tail = 8) {
+  const bpm = Number.isFinite(row.bpm) && row.bpm > 0 ? row.bpm : 120;
+  const den = Number.isFinite(row.den) && row.den > 0 ? row.den : 4;
+  const beatSeconds = (4 / den) * 60 / bpm;
+  const tailSeconds = Number.isFinite(tail) && tail >= 0 ? tail : 8;
+  // The fast lane permits 10s including the declared patch tail. Leave a
+  // rounding margin and never request more than four seconds/eight beats.
+  const seconds = Math.min(8 * beatSeconds, 4, Math.max(0, 9.9 - tailSeconds));
+  return Math.max(1, Math.min(TPB * 8, Math.floor(seconds / beatSeconds * TPB)));
+}
+function heldAuditionScope() {
+  const track = S.proj?.tracks.find(t => t.id === S.trackId);
+  return JSON.stringify([S.slug, S.projectEpoch, S.trackId, track?.instrument, track?.gainDb,
+    S.proj?.master?.outputMode, S.proj?.master?.stereo]);
+}
+let heldAuditions = null;
+function stopHeldAuditions() { heldAuditions?.clear(); }
+function heldAuditionPool() {
+  if (heldAuditions) return heldAuditions;
+  heldAuditions = createAuditionVoices({
+    isCurrent: note => S.aud.on && note.scope === heldAuditionScope(),
+    render: async (note, valid) => {
+      const result = await api({ action: "preview_note", slug: note.slug, track: note.track,
+        pitch: note.pitch, vel: note.vel, dur_ticks: note.durTicks });
+      if (!valid()) return null;
+      let buffer = S.aud.cache.get(result.url);
+      if (!buffer) {
+        const ctx = audioCtx();
+        buffer = await ctx.decodeAudioData(await (await fetch(result.url)).arrayBuffer());
+        if (S.aud.cache.size >= AUD_CACHE_MAX) S.aud.cache.delete(S.aud.cache.keys().next().value);
+        S.aud.cache.set(result.url, buffer);
+      }
+      return buffer;
+    },
+    start: async (buffer, valid, ended) => {
+      const ctx = audioCtx(); await ctx.resume(); if (!valid()) return null;
+      const src = ctx.createBufferSource(), gain = ctx.createGain();
+      src.buffer = buffer; src.connect(gain); gain.connect(S.master);
+      let stopped = false;
+      const stop = fade => {
+        if (stopped) return; stopped = true;
+        try {
+          if (fade) {
+            const at = ctx.currentTime;
+            gain.gain.cancelScheduledValues(at); gain.gain.setValueAtTime(gain.gain.value, at);
+            gain.gain.linearRampToValueAtTime(0, at + 0.012); src.stop(at + 0.015);
+          } else src.stop();
+        } catch { /* the finite buffer already ended */ }
+      };
+      src.onended = () => { src.disconnect(); gain.disconnect(); ended(); };
+      src.start();
+      return { release: () => stop(true), stop: () => stop(false) };
+    },
+  });
+  return heldAuditions;
+}
+function midiAuditionKey(e, status, pitch) { return JSON.stringify([e.target?.id || "", status & 0x0f, pitch]); }
+function auditionMidiNote(key, pitch, vel) {
+  if (!S.aud.on || !S.proj || !S.slug || !S.trackId) return;
+  const track = S.proj.tracks.find(t => t.id === S.trackId);
+  const tail = PALETTE.rows.find(row => row.id === track?.instrument?.patch)?.tail;
+  heldAuditionPool().noteOn(key, { scope: heldAuditionScope(), slug: S.slug, track: S.trackId,
+    pitch, vel, durTicks: heldPreviewTicks(S.timeline[0], tail) });
+}
+window.addEventListener("blur", stopHeldAuditions);
+window.addEventListener("pagehide", stopHeldAuditions);
+document.addEventListener("visibilitychange", () => { if (document.hidden) stopHeldAuditions(); });
 
 /* ═══════════════════════════════ docks, splitter, dialogs ═══════════════ */
 
@@ -6492,7 +6638,7 @@ const VIEW_CHIPS = [["vpDefault", "default"], ["vpDeck", "deck"], ["vpWide", "wi
  * of the server's answer and never the answer itself: every commit applies the
  * view that comes BACK, so if these ever drift from the store's the release
  * snaps to the true value in front of you instead of leaving a lie on screen. */
-const VIEW_BOUNDS = { browserW: [160, 480], mixerW: [180, 640], deckH: [260, 520] };
+const VIEW_BOUNDS = { browserW: [160, 480], mixerW: [180, 640], deckH: [280, 520] };
 const clampTo = ([lo, hi], n) => Math.max(lo, Math.min(hi, Math.round(n)));
 
 /** The view this page is showing — the document's, once one is open. */
@@ -7291,6 +7437,7 @@ async function initMidi() {
   fill();
   for (const inp of MIDI.access.inputs.values()) inp.onmidimessage = onMidi;
   MIDI.access.onstatechange = () => {
+    stopHeldAuditions();
     fill();
     for (const inp of MIDI.access.inputs.values()) inp.onmidimessage = onMidi;
   };
@@ -7312,9 +7459,10 @@ function onMidi(e) {
   const sel = $("midiDev");
   if (sel.value && e.target?.id && e.target.id !== sel.value) return;
   if (kind === 0x90 && d2 > 0) {
-    previewPitch(d1);
+    auditionMidiNote(midiAuditionKey(e, st, d1), d1, d2);
     if (MIDI.on && S.playing) MIDI.open.set(d1, { t: projTime(), vel: d2 });
   } else if (kind === 0x80 || (kind === 0x90 && d2 === 0)) {
+    heldAuditions?.release(midiAuditionKey(e, st, d1));
     const o = MIDI.open.get(d1);
     if (o !== undefined && MIDI.on) {
       MIDI.open.delete(d1);
@@ -7329,6 +7477,7 @@ function onMidi(e) {
 }
 
 $("midiDev").addEventListener("focus", initMidi);
+$("midiDev").addEventListener("change", stopHeldAuditions);
 $("midiRecBtn").addEventListener("click", async () => {
   if (noteEditBusy()) return;
   if (!MIDI.on) {
@@ -7377,6 +7526,7 @@ async function loadProject(slug) {
   liveChain = Promise.resolve();
   ++S.docRead; ++S.renderRequest;
   S.proj = null; S.timeline = []; S.totalSeconds = 0;
+  assistantDock?.refresh();
   S.view = null;                 // the outgoing project's layout is not the incoming one's
   S.trackId = null; S.devTarget = null; S.devInsert = null;
   S.drag = null; S.dragging = false; S.velStrategy = null;
@@ -7599,6 +7749,7 @@ mountInfo("daw", "#dawInfoHost");
 
 import { mountEar } from "./dawear.js";
 import { mountDawPassages } from './daw-passages.js';
+import { mountDawAssistant } from './daw-assistant.js';
 import { appConfirm, appPrompt } from "./dialog.js";
 mountEar({
   getSlug: () => S.slug,
@@ -7609,6 +7760,12 @@ passageDock = mountDawPassages($('panePassage'), {
     fromBar: Math.max(1, Math.floor(S.loopA ?? 1)),
     toBar: Math.min(S.proj?.lengthBars || 1, Math.ceil(S.loopB ?? ((S.proj?.lengthBars || 1) + 1)) - 1) }),
   onOpen: () => showDock('passage'), onRefresh: () => refreshDoc(),
+});
+assistantDock = mountDawAssistant({
+  getContext: () => ({ slug: S.proj ? S.slug : null, projectEpoch: S.projectEpoch,
+    revision: S.proj?.updatedAt ?? null, trackId: S.trackId, noteIds: [...S.sel],
+    loopA: S.loopA, loopB: S.loopB, playheadSeconds: projTime() }),
+  onLayout: refitAll,
 });
 
 /* THE EAR GETS A HOME. mountEar appends a floating pill bottom-right and a

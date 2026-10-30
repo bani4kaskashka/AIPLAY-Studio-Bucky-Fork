@@ -1,7 +1,13 @@
+import { mountAceMusic } from './ace-music.js';
+import { musicTemplateSettings, templateFormFields, assertTemplateFields } from './template-forms.js';
 import { showAvatarWorkshop, initialStudioView } from './avatar-shell.js';
+import { revealSetting } from './settings-sections.js';
 import { reactiveSourceWindow } from './reactive-source-window.js';
 import { mountH3RefMods } from './h3-refmods.js';
+import { mountH3VideoControl } from './h3-video-control.js';
+var h3VideoControl = null;
 import { mountYue2StyleAdapters } from './yue2-style-adapters.js';
+import { updateLocalModelAccess } from './local-model-access.js';
 import { createVectorizer } from './vectorize-controls.js';
 import { mountFullPlayerScore } from './full-player-score.js';
 import { musicBatchIdea } from './music-batch-spec.js';
@@ -657,7 +663,7 @@ function needModel(kind, o = {}) {
     lead: o.lead || "Download it here, or pick one that fits this machine.",
     focus: o.focus,
     apiLabel: "Pay per song with your own fal.ai key instead",
-    onApi: () => { setView("settings"); $("apiKey")?.scrollIntoView({ block: "center", behavior: "smooth" }); $("apiKey")?.focus?.(); },
+    onApi: () => { setView("settings"); revealSetting($("apiKey")); $("apiKey")?.scrollIntoView({ block: "center", behavior: "smooth" }); $("apiKey")?.focus?.(); },
     onSetup: (id) => {
       if (id !== "musicYue2Gguf") return false;
       state.musicEngine = "yue2-gguf";
@@ -753,7 +759,7 @@ function paintMusicModelSelect(sel) {
  * screen. A current pick whose files went missing shows "Find" beside it.
  *
  * `var`, not `const`: musicEnginePaint() calls the painter from early in boot. */
-var PRESET_IMAGE_CAP = { "qwen-image-2.1": "qwen-image-2.1", flux2: "coverArt", zimage: "imageZImage", "zimage-base": "imageZImageBase",
+var PRESET_IMAGE_CAP = { "moss-image": "moss-image", "qwen-image-2.1": "qwen-image-2.1", flux2: "coverArt", zimage: "imageZImage", "zimage-base": "imageZImageBase",
   anima: "imageAnima", krea2: "imageKrea2", ideogram4: "imageIdeogram" };
 var PRESET_VIDEO_CAP = { ltx: "videoLtx", h3: "video", fasth3: "videoFastH3" };
 /* What the rows read that /api/models does not carry: the covers pick, the
@@ -957,7 +963,7 @@ async function chooseMusicModel(value) {
     }
     needModel("music", c.api
       ? { title: `${c.label} needs your own key`, lead: `Paste your own key in ${c.keyPlace || "Settings"} (every song asks before it is billed), or pick a model that runs on this machine.`, focus: null }
-      : { title: `${c.label} isn't installed`, focus: MUSIC_CAP[c.engine] });
+      : { title: `${c.label} isn't installed`, focus: c.capability || MUSIC_CAP[c.engine] });
     return;
   }
   const was = { engine: state.musicEngine, precision: $("qModel")?.value };
@@ -1003,6 +1009,7 @@ function paintMusicPill() {
   const e = state.musicEngine || sel.value || "";
   const text = sel.selectedOptions?.[0]?.textContent || e;
   pill.textContent = /yue/i.test(e) ? "YuE2" : /minimax/i.test(e) ? (state.apiMode?.enabled ? "MiniMax · API" : "MiniMax")
+    : e === 'ace-step15' ? (() => { const c = (state.musicModels || []).find(c => c.engine === e && c.dit === state.musicAceModel); return c?.shortLabel || c?.label?.split(' (')[0] || 'ACE-Step 1.5'; })()
     : (text.split(/\s[—·(]/)[0] || "Model");
   if (sel.dataset && !sel.dataset.pill && $("musicInfoBtn")) {
     sel.dataset.pill = "1";
@@ -1016,6 +1023,7 @@ function paintMusicPill() {
 }
 
 function musicEnginePaint() {
+  if (typeof aceMusicUi !== 'undefined') aceMusicUi?.paint();
   const engines = state.musicEngines || {};
   const keys = Object.keys(engines).filter(k => !state.musicOnly || k === "yue2-gguf" || (k === "yue2-comfy" && state.engineExpected));
   if (!keys.length) return;                       // status not in yet; leave it hidden
@@ -2392,6 +2400,10 @@ async function reusePrompt(file) {
   }
 
   const nativeRow = t.engine === "yue2-gguf" || /yue2.*gguf/i.test(String(t.model || ""));
+  if (t.engine === 'ace-step15' && t.aceDit) {
+    await chooseMusicModel(`ace-step15:${t.aceDit}`);
+    if (state.musicEngine !== 'ace-step15' || state.musicAceModel !== t.aceDit) return;
+  }
   if (nativeRow) {
     state.musicEngine = "yue2-gguf";
     const precision = ["q4_0", "q8_0"].includes(t.quantization) ? t.quantization
@@ -2417,6 +2429,12 @@ async function reusePrompt(file) {
     if ($("yCot") && t.cot) $("yCot").value = t.cot;
     if ($("ySteps") && (t.steps === 16 || t.steps === 32)) $("ySteps").value = String(t.steps);
     if (!nativeRow && $("yPrecision")) $("yPrecision").value = t.quantization === "fp8" ? "fp8" : "none";
+  } else if (t.engine === 'ace-step15') {
+    const fields = { aLm: t.aceLm, aSteps: t.steps, aCfg: t.cfg, aBpm: t.bpm, aKey: t.keyscale,
+      aMeter: t.timesignature, aLang: t.language, aPlanTemp: t.acePlanTemp, maxDur: t.maxDuration };
+    for (const [id,value] of Object.entries(fields)) if (value != null && $(id)) $(id).value = String(value);
+    if (t.aceCodes != null) $('aCodes').checked = t.aceCodes;
+    $('maxDur').oninput(); aceMusicUi?.invalidate();
   } else {
     if (t.steps) $("qSteps").value = t.steps;
     if (t.arCfg) $("qArCfg").value = t.arCfg;
@@ -2701,7 +2719,7 @@ function currentSpec(preview, mixSeed) {
     // Instrumental sends the section scaffold on MiniMax, not an empty string
     // (see above) — and an empty string on YuE2, which sings brackets; the
     // server phrases "no vocals" into the style there.
-    lyrics: instrumental ? (aceEngine() ? "[Instrumental]" : yueEngine() ? "" : scaffold(+$("sections").value)) : $("lyrics").value,
+    lyrics: instrumental ? (aceEngine() ? (state.musicAceModel?.includes("xl_sft") ? "" : "[Instrumental]") : yueEngine() ? "" : scaffold(+$("sections").value)) : $("lyrics").value,
     instrumental,
     /* YuE2 through ComfyUI reads its OWN controls. This spec is the MiniMax
      * shape, and without these three the Music tab's "chain of thought" and
@@ -3227,14 +3245,15 @@ function acePaintOptions() {
   if (key && key.options.length < 2) key.innerHTML += ACE_KEYS.map((k) => `<option>${esc(k)}</option>`).join("");
   if (lang && !lang.options.length) lang.innerHTML = ACE_LANGS.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("");
   const choice = (state.musicModels || []).find((c) => c.engine === "ace-step15" && c.dit === state.musicAceModel)
-    || (state.musicModels || []).find((c) => c.engine === "ace-step15");
+    || (!state.musicAceModel ? (state.musicModels || []).find((c) => c.engine === "ace-step15") : null);
   const lm = $("aLm"), lms = choice?.lms || [];
   const sig = lms.join("|") + "#" + (choice?.lm || "");
   if (lm && lm.dataset.sig !== sig) {
     lm.innerHTML = lms.length
       ? lms.map((n) => `<option value="${esc(n)}">${esc(/4b/i.test(n) ? "4B (best, most memory)" : /1\.7b/i.test(n) ? "1.7B (lighter)" : n)}</option>`).join("")
       : '<option value="">none on a shelf</option>';
-    lm.value = choice?.lm || lms[0] || "";
+    if (state.musicAceLm && !lms.includes(state.musicAceLm)) lm.innerHTML += `<option value="${esc(state.musicAceLm)}">Selected planner missing</option>`;
+    lm.value = state.musicAceLm || choice?.lm || lms[0] || "";
     lm.dataset.sig = sig;
   }
   const song = $("aCoverSong");
@@ -3335,6 +3354,7 @@ function aceSpec() {
   const num = (id) => { const v = ($(id)?.value ?? "").trim(); return v === "" ? undefined : Number(v); };
   return {
     engine: "ace-step15",
+    aceDit: state.musicAceModel, aceLm: $("aLm")?.value || state.musicAceLm,
     bpm: num("aBpm"),
     keyscale: $("aKey")?.value || undefined,
     timesignature: $("aMeter")?.value || undefined,
@@ -3344,9 +3364,9 @@ function aceSpec() {
     aceCodes: !!$("aCodes")?.checked,
     acePlanTemp: num("aPlanTemp"),
     /* "" is an explicit none; the server would otherwise use the saved choice. */
-    lora: $("aLora")?.value || "",
+    lora: state.remoteOnly ? "" : $("aLora")?.value || "",
     loraStrength: Number($("aLoraStrength")?.value ?? 100) / 100,
-    aceCover: aceCover ? (aceCover.upload ? { upload: aceCover.upload } : { song: aceCover.song }) : undefined,
+    aceCover: !state.remoteOnly && aceCover ? (aceCover.upload ? { upload: aceCover.upload } : { song: aceCover.song }) : undefined,
   };
 }
 
@@ -4035,6 +4055,7 @@ function renderNow(cur, queued = 0) {
     ? `YuE2 3B (ComfyUI) · ${cur.scoreSupplied ? `singing your score (${cur.cot || "full"})` : cur.cot === "off" ? "no score plan" : `${cur.cot || "full"} score plan`} · dpm_2 · ${cur.narSteps || 32} steps · seed ${cur.seed}`
     : yue
     ? `${cur.stageLabel || "YuE2"} · ${cur.rung?.label || "Standard"}${cur.quantization === "fp8" ? " · 8-bit AR" : ""} · seed ${cur.seed}`
+    : cur.engine === 'ace-step15' ? `ACE-Step 1.5 · ${cur.aceSteps} steps · CFG ${cur.aceCfg} · seed ${cur.seed}`
     : cur.preview ? "preview · 6 steps" : "shift 5 · 15 steps · seed " + cur.seed;
 }
 
@@ -4536,7 +4557,7 @@ function rowMenuHtml(t) {
      * then fails at execution with the argument dropped, while the same node
      * takes "flac" happily -- so the option does not exist and a button for it
      * would spin and produce nothing. */
-    ...(["mp3", "opus", "flac"]
+    ...((state.remoteOnly ? [] : ["mp3", "opus", "flac"])
       .filter((x) => !new RegExp(`\.${x}$`, "i").test(t.file))
       .map((x) => ["data-export", x, `Save as ${x.toUpperCase()}`, "",
         x === "flac"
@@ -4565,7 +4586,8 @@ function rowMenuHtml(t) {
       + `<a class="rmitem" href="/api/score/sheet/${esc(t.scoreSlug)}/${esc(t.scoreVersion)}.pdf" target="_blank" rel="noopener"
          title="The same sheet as a PDF, if this machine could print it"><span>Sheet as PDF</span></a>`
     : "";
-  return sheet + items
+  const original = `<a class="rmitem" href="/api/audio/${f}?download=1" download="${esc(t.file)}"><span>Save original audio</span></a>`;
+  return original + sheet + items
     .filter(([attr]) => attr !== "data-addpl" || state.playlists?.length)
     .map(([attr, val, label, meta, title, extraF]) =>
       `<button class="rmitem${attr === "data-trash" ? " warn sep" : ""}" ${attr}="${val}"${
@@ -5466,6 +5488,7 @@ function openSong(file) {
   const rows = [
     ["seed", t.seed], ["mix seed", t.mixSeed], ["steps", t.steps],
     ["style strength", t.cfg], ["precision", t.model],
+    ...(t.engine === 'ace-step15' ? [["planner", t.aceLm], ["planner temperature", t.acePlanTemp], ["requested duration", t.maxDuration ? `${t.maxDuration}s` : null]] : []),
     ["render time", t.renderSeconds ? fmt(t.renderSeconds) : null],
     ["file", t.file],
   ].filter(([, v]) => v !== undefined && v !== null && v !== "");
@@ -8575,9 +8598,9 @@ async function loadModels() {
           // enables it; the server refuses regardless, so this is the honest
           // affordance rather than the enforcement.
           : c.gated
-            // The built-in downloader has no credential path and must not grow
-            // one — a token belongs in the user's keychain, not this app.
-            ? `<span class="mwarn">needs a HuggingFace login</span>`
+            ? c.id === "videoLtx"
+              ? `<button class="btn sm" type="button" data-local-model-access="videoLtx">Set up LTX</button>`
+              : `<span class="mwarn">needs publisher access</span>`
             : `<button class="btn sm" data-mget="${c.id}"${c.region ? " disabled" : ""}>Download ${gb(need)}</button>`;
     return `
       <div class="modelcard${c.ready ? " ready" : ""}" data-cap="${esc(c.id)}">
@@ -8591,8 +8614,9 @@ async function loadModels() {
         </div>
         <p class="mwhy">${esc(uiProse(c.why))}</p>
         ${c.requires ? `<div class="mreq">
+          ${c.requires.experimental ? '<span>Hardware unverified</span>' : `
           <span title="Graphics memory">VRAM ${c.requires.vramMinGb}+ GB<b> · ${c.requires.vramRecGb} recommended</b></span>
-          <span title="System memory">RAM ${c.requires.ramMinGb}+ GB<b> · ${c.requires.ramRecGb} recommended</b></span>
+          <span title="System memory">RAM ${c.requires.ramMinGb}+ GB<b> · ${c.requires.ramRecGb} recommended</b></span>`}
           <span>Disk ${gb(c.totalBytes)}</span>
         </div>` : ""}
         ${/* The measurements and the reasoning behind a row, behind "Details"
@@ -8604,7 +8628,7 @@ async function loadModels() {
         ${/* Gated repo: the publisher requires an accepted licence and a token.
              Say how, rather than showing a button that fails with a 401 that
              looks like a network problem. */
-          c.gated && !c.ready ? `<div class="mregion">
+          c.gated && c.id !== "videoLtx" && !c.ready ? `<div class="mregion">
           <b>Requires a HuggingFace account</b>
           <p>${esc(c.gated.how)}</p>
           <p><a href="${esc(c.gated.url)}" target="_blank" rel="noopener">Open the model page to accept the licence</a></p>
@@ -8637,6 +8661,7 @@ async function loadModels() {
       </div>`;
   });
   $("modelList").innerHTML = groupModelCards(d, htmls);
+  if (typeof updateLocalModelAccess === "function") updateLocalModelAccess(d);
 
   $("modelsNote").textContent = d.python?.packages && !d.python.packages.torch
     ? (state.musicOnly ? "Native music mode needs no Python. Start full Studio for optional image, video and stem tools." : `No python found at ${d.python.path}: the stem and lyric features need it.`)
@@ -8665,6 +8690,7 @@ async function loadModels() {
   }
 }
 let nativeModelsPoll = null;
+document.addEventListener("aiplay:local-model-refresh", () => loadModels());
 
 /* The catalogue in collapsible sections, labelled and ordered by the server.
  * Music & audio starts open; after that each section is exactly what the
@@ -8715,6 +8741,53 @@ $("modelList").addEventListener("toggle", (e) => {
 // Delegated once, at load, so the "show me this row" buttons survive repaints.
 initFit();
 initLocal(() => loadModels());
+// Explicit use of a saved setup plan fills existing forms and uses their
+// existing selection handlers. It neither starts inference nor changes modes.
+document.addEventListener('aiplay:setup-model', async event => {
+  const { target, profile, settings = {} } = event.detail || {};
+  if (!profile || (target === 'runpod') !== !!state.remoteOnly || state.musicOnly || state.cloudOnly) return;
+  const set = (id, value) => { const n = $(id); if (n && value !== undefined) { n.value = String(value); n.dispatchEvent(new Event('input', { bubbles: true })); } };
+  try {
+    if (profile.category === 'music') {
+      await loadModels();
+      const value = profile.template === 'ace-step15' ? `ace-step15:${profile.settings.dit}` : `yue2-comfy:${profile.settings.checkpoint}`;
+      if (!state.musicModels?.some(c => c.value === value && c.available)) throw Error('Install this model on the selected computer, then check its connection.');
+      await chooseMusicModel(value);
+      set('caption', 'Gentle acoustic guitar and warm piano, calm instrumental music');
+      set('maxDur', profile.settings.duration || profile.settings.maxDuration || 30);
+      if (profile.template === 'ace-step15') {
+        set('aLm', profile.settings.lm); $('aLm')?.dispatchEvent(new Event('change'));
+        set('aSteps', profile.settings.steps); set('aCfg', profile.settings.cfg);
+      }
+      setView('create');
+    } else if (target === 'local' && profile.category === 'pictures') {
+      $('imgEngine').value = 'checkpoint'; await $('imgEngine').onchange();
+      const option = [...$('imgCkpt').options].find(o => o.value.endsWith(profile.settings.checkpoint));
+      if (!option) throw Error('Open Models and refresh the installed checkpoint list.');
+      $('imgCkpt').value = option.value; $('imgCkpt').dispatchEvent(new Event('change'));
+      set('imgPrompt', 'A peaceful mountain lake at sunrise, watercolor illustration');
+      $('imgSize').value = 'custom'; $('imgSize').dispatchEvent(new Event('change'));
+      set('imgW', 512); set('imgH', 512); set('imgSteps', 4); set('imgCfg', 1); set('imgCount', 1);
+      setView('images');
+    } else if (target === 'local' && profile.category === 'video') {
+      if (!await setVideoEngine('ltx')) throw Error('Install LTX and check its runtime in Models.');
+      set('vidPrompt', 'A paper boat floating gently on a quiet pond, soft morning light');
+      set('vidSecs', profile.settings.seconds); set('vidSize', `${profile.settings.width}x${profile.settings.height}`);
+      setView('video');
+    }
+    if (profile.category === 'music') {
+      const fields=templateFormFields('music',settings,target);assertTemplateFields(document,fields);
+      if(Object.keys(settings).length){state.takes=1;for(const button of document.querySelectorAll('[data-n]'))button.classList.toggle('on',Number(button.dataset.n)===1);}
+      if(settings.instrumental!==undefined) setMode(settings.instrumental?'instrumental':'song');
+      if(settings.caption!==undefined)setGuided(false);
+      if(settings.codes!==undefined)$('aCodes').checked=settings.codes;
+      for(const [id,value]of Object.entries(fields)){set(id,value);if($(id).tagName==='SELECT')$(id).dispatchEvent(new Event('change'));}
+      if(settings.seed!==undefined){state.seedLocked=true;paintSeed();}
+      if(settings.duration!==undefined)$('maxDur').oninput?.();
+      aceMusicUi?.invalidate();
+    } else if(target==='local') {const values=profile.category==='video'&&Object.keys(settings).length?{...profile.settings,...settings}:settings;const fields=templateFormFields(profile.category,values,target);assertTemplateFields(document,fields);for(const [id,value]of Object.entries(fields))set(id,value);}
+  } catch (e) { await appAlert(e.message, { title: 'Selected model needs setup' }); }
+});
 /* Advanced → Precision is the same choice as the music model picker. */
 $("qModel")?.addEventListener("change", () => chooseMusicModel(`minimax-music3:${$("qModel").value}`));
 /* The acknowledgement toggles its own card's button. Handled on `change` rather
@@ -8910,6 +8983,7 @@ function vidPaint() {
   }
   $("vidEngine").value = cur;
   $("qVideoEngine").value = cur;
+  if (typeof h3VideoControl !== "undefined") h3VideoControl?.paint();
 
   /* Sizes are PER ENGINE and rebuilt on every switch. H3's native 1344x768 is
    * not a legal LTX size, and two of H3's four options quantise to something
@@ -10076,8 +10150,28 @@ const h3RefModPanel = mountH3RefMods($("vidH3Extras"), {
   getImages: () => state.refImages || [], onChange: () => vidPaint(),
 });
 globalThis.aiplayH3Extras = () => h3RefModPanel.spec();
+h3VideoControl = mountH3VideoControl($("vidControlField"), {
+  getEngine: () => $("vidEngine").value || state.video?.engine || "h3",
+  getRemote: () => !!state.remoteOnly || $("vidRenderWhere")?.value === "runpod",
+  getCustom: () => !!state.workflows?.assigned?.video,
+  getRecipe: () => !!state.videoRecipeLoaded,
+  getClips: () => state.clips || [], loadClips,
+  onChange: () => vidPaint(), offerModel,
+});
+globalThis.aiplayH3VideoControl = () => h3VideoControl.spec();
+globalThis.aiplayH3VideoControlCheck = (result, requested) => h3VideoControl.readiness(result, requested);
+/* Run before the RunPod capture handler, which otherwise consumes Render. */
+$("vidCreate")?.addEventListener("click", event => {
+  try { h3VideoControl.assertAllowed(); }
+  catch (error) {
+    event.preventDefault(); event.stopImmediatePropagation();
+    $("clipNote").textContent = error.message;
+  }
+}, true);
 
 function videoFriendRecipe() {
+  if (typeof globalThis.aiplayH3VideoControl === "function" && globalThis.aiplayH3VideoControl().sourceVideo)
+    throw new Error("Remove the source clip before sending this text-only friend recipe.");
   if (typeof globalThis.aiplayH3Extras === "function" && Object.keys(globalThis.aiplayH3Extras()).length)
     throw new Error("Clear reference caches and tweaks before sending this text-only recipe.");
   const recipeEngine = state.video?.engine || "ltx";
@@ -10133,6 +10227,7 @@ $("cbUseVideo")?.addEventListener("click",async()=>{
   if (!(await setVideoEngine(opened.video.engine))) return;
   if (cbOpenedVideo !== opened) return;
   const v=opened.video;
+  if (typeof h3VideoControl !== "undefined") h3VideoControl?.clear();
   $("vidPrompt").value=v.prompt; $("vidNeg").value=v.negative || ""; $("vidSeed").value=String(v.seed);
   Object.assign($("vidSecs"),{min:"1",max:"20",step:"any"});
   Object.assign($("vidSteps"),{min:"2",max:"40",step:"1"});
@@ -10149,6 +10244,9 @@ $("cbUseVideo")?.addEventListener("click",async()=>{
 });
 
 $("vidCreate").onclick = async () => {
+  let controlSpec;
+  try { controlSpec = h3VideoControl?.assertAllowed() || {}; }
+  catch (error) { $("clipNote").textContent = error.message; return; }
   if (!state.video?.enabled) {
     const go = await bottomDrawer({
       title: "Video is switched off",
@@ -10189,6 +10287,7 @@ $("vidCreate").onclick = async () => {
       body: JSON.stringify({
         action: "create",
         ...h3RefModPanel.spec(),
+        ...controlSpec,
         prompt: $("vidPrompt").value,
         title: $("vidFrom").selectedOptions[0]?.dataset.title || "",
         fromCover: $("vidFrom").value || undefined,
@@ -10241,6 +10340,7 @@ $("vidCreate").onclick = async () => {
         ...(state.videoRecipeLoaded ? {bridge:"off",bridgeAlpha:0} : {}),
       }),
     })).json();
+    h3VideoControl?.readiness(r, controlSpec);
     if (r.error) { if (typeof globalThis.aiplayStartFailed === "function") globalThis.aiplayStartFailed("vidEst", r); else failSay(r); return; }
     if (typeof globalThis.aiplayStartOk === "function") globalThis.aiplayStartOk("vidEst");
     /* What the server changed from the request, and the RAM line, in its words. */
@@ -10254,9 +10354,15 @@ $("vidCreate").onclick = async () => {
 };
 
 async function loadClips() {
-  let d = null;
-  try { d = await (await fetch("/api/clips")).json(); } catch { /* server busy */ }
-  if (!d) return;
+  const starRevision = clipStarRevision;
+  let d = null, response;
+  try { response = await fetch("/api/clips"); d = await response.json(); } catch { /* server busy */ }
+  // A poll started before a saved favourite must not paint its older answer.
+  if (!d || starRevision !== clipStarRevision) return;
+  if (!response.ok || d.error || !Array.isArray(d.clips)) {
+    failSay({ error: d.error || "Could not read the video library." });
+    return;
+  }
   state.clips = d.clips;
   /* ⚠ KEEP THE MEMORY CEILING. /api/clips sends `enhanceLimitBytes` for one
    * reason, and says so at the seam that writes it: "So the dialog's warning
@@ -10285,6 +10391,56 @@ document.addEventListener("aiplay:remote-output", (event) => {
   if (event.detail?.kind === "vid") loadClips();
 });
 
+var clipStarRevision = 0;
+var clipStarPending = new Set();
+
+function paintClipStars() {
+  for (const button of document.querySelectorAll("[data-cstar]")) {
+    const name = button.dataset.cstar;
+    const clip = (state.clips || []).find((c) => c.name === name);
+    const starred = !!clip?.starred;
+    const label = starred ? "Remove from favourites" : "Favourite video";
+    button.textContent = starred ? "★" : "☆";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.setAttribute("aria-pressed", String(starred));
+    // aria-disabled keeps keyboard focus while duplicate saves are guarded.
+    button.setAttribute("aria-disabled", String(clipStarPending.has(name)));
+    button.setAttribute("aria-busy", String(clipStarPending.has(name)));
+    button.disabled = !clip;
+  }
+}
+
+async function toggleClipStar(name) {
+  const clip = (state.clips || []).find((c) => c.name === name);
+  if (!clip || clipStarPending.has(name)) return;
+  clipStarPending.add(name);
+  clipStarRevision++;
+  paintClipStars();
+  try {
+    const response = await fetch("/api/clips", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "flag", flag: "starred", name, value: !clip.starred }),
+    });
+    const result = await response.json();
+    if (!response.ok || result.error) throw new Error(result.error || "Could not save favourite.");
+    // loadClips may have replaced the row while the save was in flight.
+    for (const current of state.clips || []) if (current.name === name) current.starred = result.starred;
+    clipStarRevision++;
+    const focused = document.activeElement;
+    paintClips();
+    if (focused?.dataset?.cstar === name && !focused.isConnected) {
+      const replacement = [...$("clipGrid").querySelectorAll("[data-cstar]")].find((b) => b.dataset.cstar === name);
+      (replacement || $("clipFilter")).focus();
+    }
+  } catch (error) {
+    failSay({ error: error.message || "Could not save favourite." });
+  } finally {
+    clipStarPending.delete(name);
+    paintClipStars();
+  }
+}
+
 function paintClips() {
   /* Tear the hover preview down BEFORE the repaint. innerHTML is replaced below,
    * which detaches whatever tile the pointer is resting on — and no mouseout
@@ -10298,6 +10454,7 @@ function paintClips() {
   const sort = $("clipSort").value;
 
   let rows = all.filter((c) => {
+    if (filter === "starred" && !c.starred) return false;
     /* A FINISHED FILM is one the Studio assembled — renderTimeline stamps
      * source:"timeline" when it writes the output, so this asks the library
      * what a clip IS rather than pattern-matching its name. A 600-clip folder
@@ -10322,6 +10479,9 @@ function paintClips() {
       : sort === "big" ? b.bytes - a.bytes
       : sort === "slow" ? (b.seconds || 0) - (a.seconds || 0)
       : b.at - a.at));
+  // The viewer follows this exact filtered order, including an empty result.
+  state.clipsShown = rows;
+  refreshClipViewNav();
 
   $("vidCount").textContent = all.length
     ? (rows.length === all.length ? `${all.length} clip${all.length > 1 ? "s" : ""}`
@@ -10454,6 +10614,7 @@ function clipCard(c) {
       </div>
       <div class="clipmeta">
         <div class="cmrow"><b title="${esc(m.prompt || stem)}">${esc(c.title || clipPromptTitle(m.prompt) || stem)}</b>
+          <button class="edtool sm clipstar" type="button" data-cstar="${esc(c.name)}" aria-pressed="${!!c.starred}" aria-label="${c.starred ? "Remove from favourites" : "Favourite video"}" title="${c.starred ? "Remove from favourites" : "Favourite video"}" aria-disabled="${clipStarPending.has(c.name)}" aria-busy="${clipStarPending.has(c.name)}">${c.starred ? "★" : "☆"}</button>
           <span class="cbadges">${badges.map((b) => `<span class="cbadge">${esc(b)}</span>`).join("")}</span></div>
         <span class="cmsub" title="${esc(`${stem} · ${Math.round(c.bytes / 1024)} KB`)}">${c.at ? clipDate(c.at) : ""}${c.at && c.seconds ? " · " : ""}${c.seconds ? `took ${fmt(c.seconds)}` : ""}${!c.at && !c.seconds ? `${Math.round(c.bytes / 1024)} KB` : ""}</span>
       </div>
@@ -10473,11 +10634,30 @@ function clipCard(c) {
  * screen. Stepping through a different order than the one you can see is
  * disorienting in a way that is hard to name and easy to feel.
  */
-let clipView = { name: null, list: [] };
+var clipView = { name: null, list: [], anchor: 0 };
 
 function clipViewList() {
-  const src = (state.clipsShown && state.clipsShown.length) ? state.clipsShown : (state.clips || []);
+  const src = Array.isArray(state.clipsShown) ? state.clipsShown : (state.clips || []);
   return src.map((c) => c.name).filter((n) => !/\.(mp3|wav|flac|ogg|opus|m4a)$/i.test(n));
+}
+
+// Refresh navigation separately from the media, so starring never restarts it.
+function refreshClipViewNav() {
+  if (!clipView?.name) return;
+  const list = clipViewList();
+  const at = list.indexOf(clipView.name);
+  if (at >= 0) clipView.anchor = at;
+  else {
+    const oldAt = clipView.list.indexOf(clipView.name);
+    if (oldAt >= 0) clipView.anchor = clipView.list.slice(0, oldAt).filter((name) => list.includes(name)).length;
+    clipView.anchor = Math.min(list.length, clipView.anchor || 0);
+  }
+  clipView.list = list;
+  clipView.previous = list[(at >= 0 ? at : clipView.anchor) - 1] || null;
+  clipView.next = list[at >= 0 ? at + 1 : clipView.anchor] || null;
+  $("clipViewPos").textContent = at >= 0 ? `${at + 1} / ${list.length}` : "Not in results";
+  $("clipViewPrev").disabled = !clipView.previous;
+  $("clipViewNext").disabled = !clipView.next;
 }
 
 function openClipView(name) {
@@ -10494,7 +10674,6 @@ function paintClipView() {
   if (!name) return;
   const c = (state.clips || []).find((x) => x.name === name) || {};
   const m = c.meta || {};
-  const at = clipView.list.indexOf(name);
   const isImg = /\.(png|jpg|jpeg|webp|gif)$/i.test(name);
   $("clipViewMedia").innerHTML = isImg
     ? `<img src="/api/clip/${encodeURIComponent(name)}" alt="">`
@@ -10506,15 +10685,14 @@ function paintClipView() {
     c.seconds ? `took ${fmt(c.seconds)}` : "",
     c.bytes ? `${Math.round(c.bytes / 1024)} KB` : "",
   ].filter(Boolean).join("  .  ");
-  $("clipViewPos").textContent = at >= 0 ? `${at + 1} / ${clipView.list.length}` : "";
-  $("clipViewPrev").disabled = at <= 0;
-  $("clipViewNext").disabled = at < 0 || at >= clipView.list.length - 1;
+  refreshClipViewNav();
+  $("clipViewStar").dataset.cstar = name;
+  paintClipStars();
 }
 
 function clipViewStep(delta) {
-  const at = clipView.list.indexOf(clipView.name);
-  if (at < 0) return;
-  const next = clipView.list[Math.min(clipView.list.length - 1, Math.max(0, at + delta))];
+  refreshClipViewNav();
+  const next = delta < 0 ? clipView.previous : clipView.next;
   if (!next || next === clipView.name) return;
   clipView.name = next;
   paintClipView();
@@ -10532,6 +10710,13 @@ function closeClipView() {
 }
 
 document.addEventListener("click", (e) => {
+  const star = e.target.closest("[data-cstar]");
+  if (star) {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleClipStar(star.dataset.cstar);
+    return;
+  }
   const open = e.target.closest("[data-cview]");
   /* The CARD carries data-cview, so every control inside it matches too. The
    * explicit view button is the one exception -- it carries its own. */
@@ -18001,15 +18186,104 @@ function imgEffectiveEngine() {
   return ck?.engine || "checkpoint";
 }
 
+const IMG_MOSS_PRESETS = {
+  standard: { steps: 25, cfg: 2.5, sampler: "er_sde", scheduler: "simple" },
+  "spectrum-manual-h1": { steps: 25, cfg: 2.5, sampler: "er_sde", scheduler: "simple" },
+  "spectrum-adaptive-h2": { steps: 25, cfg: 2.5, sampler: "er_sde", scheduler: "simple" },
+  "turbo-4": { steps: 4, cfg: 1, sampler: "euler", scheduler: "simple" },
+  "dmd-8": { steps: 8, cfg: 1, sampler: "euler", scheduler: "simple" },
+  "kromoss-standard": { steps: 25, cfg: 2.5, sampler: "er_sde", scheduler: "simple" },
+  "kromoss-dmd2-8": { steps: 8, cfg: 1, sampler: "euler", scheduler: "simple" },
+  "moss-hires-v03": { steps: 25, cfg: 4, sampler: "er_sde", scheduler: "simple", size: 2048 },
+  "nsfw-uncensored": { steps: 30, cfg: 3, sampler: "er_sde", scheduler: "simple" },
+};
+var imgMossPriorSize = null;
+let imgMossKey = "", imgMossRequest = 0, imgMossReady = false;
+function imgMossRecipe() {
+  return IMG_MOSS_PRESETS[$("imgMossPreset")?.value || "standard"] || IMG_MOSS_PRESETS.standard;
+}
+function imgMossQuery() {
+  const q = new URLSearchParams({ mossPreset: $("imgMossPreset")?.value || "standard" });
+  if ($("imgEngine").value === "checkpoint") {
+    if ($("imgCkpt").value) q.set("dit", $("imgCkpt").value);
+    for (const key of ["encoder", "vae"]) { const v = $(key === "encoder" ? "imgEncoder" : "imgVae").value; if (v && v !== "auto") q.set(key, v); }
+  }
+  return q;
+}
+async function imgMossCheck(force = false) {
+  if (imgEffectiveEngine() !== "moss-image") return;
+  const key = imgMossQuery().toString();
+  if (!force && key === imgMossKey) return;
+  imgMossKey = key; const request = ++imgMossRequest; imgMossReady = false;
+  $("imgMossState").textContent = "checking"; $("imgMossGet").hidden = $("imgMossSetup").hidden = true; imgQueueGate();
+  try {
+    const result = await (await fetch("/api/images/moss-status?" + key)).json();
+    if (request !== imgMossRequest || imgEffectiveEngine() !== "moss-image") return;
+    imgMossReady = result.ready === true;
+    $("imgMossState").textContent = imgMossReady ? "ready" : "unavailable";
+    $("imgMossState").title = result.error || "Native recipe ready";
+    $("imgMossGet").hidden = !result.needsModel;
+    $("imgMossGet").onclick = () => offerModel({ needsModel: result.needsModel, error: result.error });
+    $("imgMossSetup").hidden = !result.spectrum || result.spectrum.ready === true;
+  } catch (err) {
+    if (request !== imgMossRequest) return;
+    $("imgMossState").textContent = "unavailable"; $("imgMossState").title = err.message;
+  }
+  imgQueueGate();
+}
+function imgMossShape(reset = false) {
+  const moss = imgEffectiveEngine() === "moss-image", recipe = imgMossRecipe();
+  const hires = moss && recipe.size === 2048;
+  // This tested high-resolution recipe makes one 2048-square image. Keep the
+  // previous form values so switching recipes never loses the person's size.
+  if (hires) {
+    if (!imgMossPriorSize) imgMossPriorSize = { size: $("imgSize").value, width: $("imgW").value, height: $("imgH").value, count: $("imgCount").value };
+    $("imgSize").value = "custom"; $("imgW").value = $("imgH").value = "2048"; $("imgCount").value = "1";
+    $("imgCustomL").hidden = $("imgCustomW").hidden = false;
+    for (const id of ["imgSize", "imgW", "imgH", "imgCount"]) $(id).disabled = true;
+  } else if (imgMossPriorSize) {
+    $("imgSize").value = imgMossPriorSize.size; $("imgW").value = imgMossPriorSize.width;
+    $("imgH").value = imgMossPriorSize.height; $("imgCount").value = imgMossPriorSize.count;
+    imgMossPriorSize = null;
+    $("imgCustomL").hidden = $("imgCustomW").hidden = $("imgSize").value !== "custom";
+    for (const id of ["imgSize", "imgW", "imgH", "imgCount"]) $(id).disabled = false;
+  }
+  $("imgMossLabel").hidden = $("imgMossRow").hidden = !moss;
+  const fixed = moss && ($("imgMossPreset").value || "standard") !== "standard";
+  $("imgSteps").disabled = $("imgCfg").disabled = fixed;
+  if (moss) {
+    $("imgSteps").max = fixed ? recipe.steps : 50;
+    if (fixed || reset) {
+      $("imgSteps").value = recipe.steps; $("imgStepsV").textContent = recipe.steps;
+      $("imgCfg").value = recipe.cfg; $("imgCfgV").textContent = recipe.cfg;
+    }
+    imgMossCheck();
+  } else if (imgMossKey) { imgMossKey = ""; imgMossRequest++; imgMossReady = false; }
+}
+$("imgMossPreset").onchange = () => {
+  // A named recipe owns its checkpoint. Leave the custom-file route when the
+  // person picks one, so a previously selected SFT file cannot shadow Kromoss.
+  if ($("imgEngine").value === "checkpoint" && imgEffectiveEngine() === "moss-image") {
+    $("imgEngine").value = "moss-image";
+    $("imgEngine").onchange?.();
+  }
+  imgMossShape(true); imgSampling(); imgQwenShape();
+};
+$("imgMossCheck").onclick = () => imgMossCheck(true);
+
 let imgQwenStatus = null, imgQwenChecking = false, imgQwenRequest = 0, imgMakePending = false;
 let imgQwenRequestedKey = "", imgQwenStatusKey = "";
 function imgQueueGate() {
   const remote = $("imgRenderWhere")?.value === "runpod";
   $("imgGo").disabled = $("imgGo").dataset.runpodBusy === "1" || imgMakePending || (!remote && imgEffectiveEngine() === "qwen-image-2.1"
-    && (imgQwenChecking || imgQwenStatus?.ready !== true || imgQwenStatusKey !== imgQwenQuery().toString()));
+    && (imgQwenChecking || imgQwenStatus?.ready !== true || imgQwenStatusKey !== imgQwenQuery().toString()))
+    || (!remote && imgEffectiveEngine() === "moss-image" && (!imgMossReady || imgMossKey !== imgMossQuery().toString()));
 }
 function imgQwenShape() {
-  const qwen = imgEffectiveEngine() === "qwen-image-2.1";
+  imgMossShape();
+  const effective = imgEffectiveEngine();
+  const qwen = effective === "qwen-image-2.1";
+  const moss = effective === "moss-image";
   $("imgQwenOptions").hidden = !qwen;
   if (!qwen) imgQwenPaint("off");
   if (qwen) {
@@ -18024,16 +18298,18 @@ function imgQwenShape() {
     if (!negative) $("imgNeg").value = "";
   } else {
     for (const id of ["imgSize", "imgW", "imgH"]) $(id).disabled = false;
-    $("imgCfg").max = 15;
-    const negative = ["checkpoint", "zimage-base"].includes($("imgEngine").value);
+    $("imgCfg").max = moss ? 10 : 15;
+    const negative = moss ? Number($("imgCfg").value) > 1 : ["checkpoint", "zimage-base"].includes($("imgEngine").value);
     $("imgNeg").parentElement.hidden = !negative;
     document.querySelector('label[for="imgNeg"]').hidden = !negative;
+    if (moss && !negative) $("imgNeg").value = "";
   }
-  const advanced = $("imgEngine").value === "checkpoint" && !qwen;
+  const advanced = $("imgEngine").value === "checkpoint" && !qwen && !moss;
   $("imgAdvToggle").parentElement.hidden = !advanced;
   $("imgAdvToggle").parentElement.previousElementSibling.hidden = !advanced;
   if (!advanced) $("imgAdv").hidden = true;
   imgDraftPaint();                               // Fast draft follows the same choices
+  if (moss) imgMossShape();                       // A leaving draft must not unlock a fixed MOSS recipe.
   imgQueueGate();
 }
 /* ⚠ `refs` IS A BUCKET, NOT A COUNT, and that is what stops this screen from
@@ -18661,6 +18937,8 @@ $("imgRefWrap").addEventListener("click", (e) => {
  * this flag against ZIMAGE_PRESET.cfgs in workflow.js — the browser cannot
  * import a server module, so this copy is the one that could drift. */
 const IMG_ENGINES = {
+  "moss-image": { steps: 25, cfg: 2.5, negative: true, maxSteps: 50, sampling: { sampler: "er_sde", scheduler: "simple", fixed: true },
+    note: "MOSS-Image SFT (experimental): text only, 25 steps at CFG 2.5; use Qwen for reference edits." },
   "qwen-image-2.1": {
     steps: 25, cfg: 1, negative: true, maxSteps: 50, sampling: { sampler: "euler", scheduler: "simple", fixed: true },
     note: "Qwen Image 2.1 · native INT8 · generation and editing with up to 10 references. Default: 25 steps, CFG 1, Euler / simple. Optional transparent PNG output. A negative prompt is available above CFG 1.",
@@ -18730,7 +19008,8 @@ function imgApplyArch() {
   $("imgStepsV").textContent = d.steps;
   $("imgCfg").value = d.cfg;
   $("imgCfgV").textContent = d.cfg;
-  if (ck?.engine === "qwen-image-2.1") $("imgSteps").max = IMG_ENGINES["qwen-image-2.1"].maxSteps;
+  if (["qwen-image-2.1", "moss-image"].includes(ck?.engine)) $("imgSteps").max = IMG_ENGINES[ck.engine].maxSteps;
+  $("imgCfg").max = ck?.engine === "moss-image" ? 10 : 15;
   const cur = $("imgSize").value;
   $("imgSize").innerHTML = d.sizes.map(([w, h]) =>
     `<option value="${w}x${h}"${w === d.native && h === d.native ? " selected" : ""}>${w} × ${h}${w === h ? " · square" : w > h ? " · landscape" : " · portrait"}</option>`).join("")
@@ -18755,6 +19034,7 @@ $("imgCkpt").addEventListener("change", imgApplyArch);
 let imgParts = null;           // { encoders, vaes } from /api/modelparts
 
 const DIT_KINDS = [
+  ["moss-image", "MOSS-Image"],
   ["qwen-image-2.1", "Qwen Image 2.1"],
   ["zimage", "Z-Image"], ["anima", "Anima"], ["flux2", "FLUX.2"], ["krea2", "Krea 2"],
 ];
@@ -18801,7 +19081,8 @@ $("imgCkpt").addEventListener("change", imgPartsShape);
 $("imgCkpt").addEventListener("change", imgRefsPaint);
 $("imgDitKind").addEventListener("change", () => {
   const spec = IMG_ENGINES[imgEffectiveEngine()];
-  if (imgEffectiveEngine() === "qwen-image-2.1") {
+  $("imgCfg").max = imgEffectiveEngine() === "moss-image" ? 10 : 15;
+  if (["qwen-image-2.1", "moss-image"].includes(imgEffectiveEngine())) {
     $("imgSteps").value = spec.steps; $("imgStepsV").textContent = spec.steps;
     $("imgCfg").value = spec.cfg; $("imgCfgV").textContent = spec.cfg;
   }
@@ -18823,6 +19104,7 @@ let imgLoraShelf = [];      // what the folder holds, judged against the checkpo
 export function ckptSampling(ck, fallbackName = "") {
   const name = String(ck?.name || fallbackName || "").toLowerCase();
   const kind = `${ck?.family || ""} ${ck?.variant || ""}`.toLowerCase();
+  if (/moss[- ]image/.test(kind)) return { sampler: "er_sde", scheduler: "simple", why: "MOSS-Image model" };
   if (/qwen[- ]image[ -]2\.1/.test(kind)) return { sampler: "euler", scheduler: "simple", why: "Qwen Image 2.1 model" };
   if (/\banima\b/.test(kind) || /anima(?!gine|l|te|tion|ted)/.test(name)) return { sampler: "er_sde", scheduler: "simple", why: "Anima model" };
   if (/z-image|lumina|zimage/.test(`${kind} ${name}`)) return { sampler: "res_multistep", scheduler: "simple", why: "Z-Image model" };
@@ -18835,8 +19117,8 @@ export function ckptSampling(ck, fallbackName = "") {
 async function imgSampling() {
   const eng = $("imgEngine").value;
   const effective = imgEffectiveEngine();
-  const spec = IMG_ENGINES[effective]?.sampling;
-  const want = effective === "qwen-image-2.1" ? spec : eng === "checkpoint" ? ckptSampling(imgCkptShelf.find((c) => c.name === $("imgCkpt").value), $("imgCkpt").value) : spec;
+  const spec = effective === "moss-image" ? { ...imgMossRecipe(), fixed: true } : IMG_ENGINES[effective]?.sampling;
+  const want = ["qwen-image-2.1", "moss-image"].includes(effective) ? spec : eng === "checkpoint" ? ckptSampling(imgCkptShelf.find((c) => c.name === $("imgCkpt").value), $("imgCkpt").value) : spec;
   if (!want) return;
   await imgLoadSampling();
   /* The engine may be down (no list yet): show the pair anyway. */
@@ -18844,7 +19126,7 @@ async function imgSampling() {
     const sel = $(id);
     if (![...sel.options].some((o) => o.value === v)) sel.insertAdjacentHTML("beforeend", `<option>${esc(v)}</option>`);
     sel.value = v;
-    sel.disabled = !!spec?.fixed && (eng !== "checkpoint" || effective === "qwen-image-2.1");
+    sel.disabled = !!spec?.fixed && (eng !== "checkpoint" || ["qwen-image-2.1", "moss-image"].includes(effective));
     sel.title = sel.disabled ? `${IMG_ENGINES[eng] ? eng : "This engine"} always renders with ${want.sampler} / ${want.scheduler}` : (want.why ? `Set for this ${want.why}; pick another if you like` : "");
   }
 }
@@ -19061,7 +19343,7 @@ $("imgSize").onchange = () => {
  * handler below also runs once at load, and a window on page load for a model
  * nobody chose would be noise. Anima and checkpoints run on files the person
  * names, so they are left to the Create check. */
-const IMG_CAP = { flux2: "coverArt", ideogram4: "imageIdeogram", zimage: "imageZImage", "zimage-base": "imageZImageBase", krea2: "imageKrea2" };
+const IMG_CAP = { "moss-image": "moss-image", flux2: "coverArt", ideogram4: "imageIdeogram", zimage: "imageZImage", "zimage-base": "imageZImageBase", krea2: "imageKrea2" };
 $("imgEngine").addEventListener("change", async (e) => {
   if (!e.isTrusted) return;
   const id = IMG_CAP[$("imgEngine").value];
@@ -19094,6 +19376,7 @@ $("imgEngine").onchange = async () => {
    * either refused a legal ask or offered one the server would silently clamp.
    * Kept in step with the clamp in /api/image; mcp-image_test.js diffs them. */
   $("imgSteps").max = spec?.maxSteps || 30;
+  $("imgCfg").max = eng === "moss-image" ? 10 : 15;
   if (spec?.steps) {
     $("imgSteps").value = spec.steps;
     $("imgStepsV").textContent = spec.steps;
@@ -19105,6 +19388,7 @@ $("imgEngine").onchange = async () => {
    * showing. */
   if (spec && !spec.negative) $("imgNeg").value = "";
   $("imgModelNote").textContent = spec?.note || "";
+  imgMossShape(true);
   imgSampling();                                 // this engine's sampler and schedule
   // The reference block is never hidden — it explains itself instead.
   imgRefsPaint();
@@ -19279,8 +19563,9 @@ $("imgGo").onclick = async () => {
           ...(effective === "checkpoint" && Number($("imgClipSkip").value) > 1 ? { clipSkip: Number($("imgClipSkip").value) } : {}),
           ...($("imgSampler").value ? { sampler: $("imgSampler").value } : {}),
           ...($("imgSched").value ? { scheduler: $("imgSched").value } : {}),
-          ...(effective !== "qwen-image-2.1" && imgLoraStack.length ? { loras: imgLoraStack.map((l) => ({ name: l.name, strength: l.strength })) } : {}),
+          ...(!["qwen-image-2.1", "moss-image"].includes(effective) && imgLoraStack.length ? { loras: imgLoraStack.map((l) => ({ name: l.name, strength: l.strength })) } : {}),
         } : {}),
+        ...(effective === "moss-image" ? { mossPreset: $("imgMossPreset").value || "standard", cfg: Number($("imgCfg").value) || 2.5, negative: $("imgNeg").value.trim(), sampler: imgMossRecipe().sampler, scheduler: imgMossRecipe().scheduler } : {}),
         ...(effective === "qwen-image-2.1" ? {
           refSizing: $("imgRefSizing").value, refResolution: 1024, transparent: $("imgTransparent").checked,
           cfg: Number($("imgCfg").value) || 1, negative: $("imgNeg").value.trim(), sampler: "euler", scheduler: "simple",
@@ -21190,8 +21475,9 @@ function ovImageIdea(prompt) {
       ...(effective === "checkpoint" && Number($("imgClipSkip").value) > 1 ? { clipSkip: Number($("imgClipSkip").value) } : {}),
       ...($("imgSampler").value ? { sampler: $("imgSampler").value } : {}),
       ...($("imgSched").value ? { scheduler: $("imgSched").value } : {}),
-      ...(effective !== "qwen-image-2.1" && imgLoraStack.length ? { loras: imgLoraStack.map((l) => ({ name: l.name, strength: l.strength })) } : {}),
+      ...(!["qwen-image-2.1", "moss-image"].includes(effective) && imgLoraStack.length ? { loras: imgLoraStack.map((l) => ({ name: l.name, strength: l.strength })) } : {}),
     } : {}),
+    ...(effective === "moss-image" ? { mossPreset: $("imgMossPreset").value || "standard", cfg: Number($("imgCfg").value) || 2.5, negative: $("imgNeg").value.trim(), sampler: imgMossRecipe().sampler, scheduler: imgMossRecipe().scheduler } : {}),
     ...(effective === "qwen-image-2.1" ? {
       refSizing: $("imgRefSizing").value, refResolution: 1024, transparent: $("imgTransparent").checked,
       cfg: Number($("imgCfg").value) || 1, negative: $("imgNeg").value.trim(), sampler: "euler", scheduler: "simple",
@@ -21538,11 +21824,12 @@ function play(file, title, seed) {
   audio.src = `/api/audio/${file}`;
   audio.play().catch(() => {});
   $("pTitle").textContent = title || "—";
-  $("pSub").textContent = `generated locally · seed ${seed}`;
+  $("pSub").textContent = `seed ${seed}`;
   // Look the track up rather than taking a seed alone, so the mini player shows
   // the same cover as the row it was launched from.
   const decoded = decodeURIComponent(file);
   const track = (state.library || []).find((x) => x.file === decoded);
+  if (track?.executionTarget) $("pSub").textContent = `${track.executionTarget === 'runpod' ? 'RunPod' : track.executionTarget === 'api' ? 'Music API' : 'This PC'} · seed ${seed}`;
   $("pArt").style.background = artBg(track || { seed: Number(seed) || 0 });
   $("pPlay").textContent = "❚❚";
   // Remembered rather than applied as a class, because the list re-renders on
@@ -21989,6 +22276,7 @@ function applyStatus(s) {
   $("engineLineWrap").style.cursor = engFail ? "pointer" : "";
   /* RunPod GPU mode: no local engine to wait for; the queue renders on the Pod. */
   state.remoteOnly = !!s.config?.remoteOnly;
+  state.musicComputer = s.config?.musicComputer || null;
   $("btnCreate").disabled = $("btnPreview").disabled = !s.engine.ready && !state.remoteOnly;
 
   const b = s.engine.backend;
@@ -22219,8 +22507,10 @@ function applyStatus(s) {
         /* Before the sampler starts, `progress` is genuinely 0 and the time is
          * going into loading ~19 GB of H3 weights. Saying so beats a bar that
          * sits at zero looking stuck — that load is most of a cold render. */
-        const left = pct > 8 ? Math.round((c.elapsed / (pct / 100)) - c.elapsed) : null;
-        $("vidNowNote").textContent = pct === 0
+        const left = !c.controlPhase && pct > 8 ? Math.round((c.elapsed / (pct / 100)) - c.elapsed) : null;
+        $("vidNowNote").textContent = c.controlPhase && c.note
+          ? `${fmt(c.elapsed)} elapsed · ${c.note}`
+          : pct === 0
           ? `${fmt(c.elapsed)} elapsed · loading the video model: this is most of a cold start`
           : `${fmt(c.elapsed)} elapsed`
             + (left != null ? ` · about ${fmt(left)} to go` : "")
@@ -22958,3 +23248,36 @@ if (linkedDawPassage) {
     await loadReviewedMusicRequest(prepared);
   }).catch(error => appAlert(error.message, 'DAW draft was kept'));
 }
+
+for (const [id,category] of [['musicSaveTemplate','music'],['picturesSaveTemplate','pictures'],['videoSaveTemplate','video']]) $(id)?.addEventListener('click',async()=>{
+  try {
+    const target=state.remoteOnly?'runpod':'local',r=await fetch('/api/setup-plan?target='+target),plan=await r.json();if(!r.ok)throw Error(plan.error);
+    let profile,settings;
+    if(category==='music'){const spec=currentSpec(false);settings=musicTemplateSettings(spec);profile=plan.choices.find(p=>p.category==='music'&&p.settings.dit===settings.dit);}
+    else if(category==='pictures'){
+      const checkpoint=$(state.remoteOnly?'imgRunPodCheckpoint':'imgCkpt')?.value?.split('/').pop();
+      profile=plan.choices.find(p=>p.category==='pictures'&&p.settings.checkpoint===checkpoint);
+      settings={prompt:$('imgPrompt').value,negative:$('imgNeg')?.value||'',width:Number($('imgW').value),height:Number($('imgH').value),steps:Number($('imgSteps').value),cfg:Number($(state.remoteOnly?'imgRunPodCfg':'imgCfg').value)};
+    } else {
+      if (globalThis.aiplayH3VideoControl?.().sourceVideo) throw Error('Remove the source clip before saving a video template.');
+      if($(state.remoteOnly?'vidRunPodModel':'vidEngine')?.value!=='ltx')throw Error('Creative video templates currently support the curated LTX workflow.');
+      profile=plan.choices.find(p=>p.category==='video');settings={prompt:$('vidPrompt').value,seconds:Number($('vidSecs').value)};
+    }
+    if(!profile)throw Error('Choose a supported curated model before saving a template.');
+    document.dispatchEvent(new CustomEvent('aiplay:template-capture',{detail:{target,selection:{[category]:profile.id},settings:{[category]:settings}}}));
+  }catch(e){await appAlert(e.message,{title:'Save creative template'});}
+});
+
+var aceMusicUi = mountAceMusic({ getState: () => state, readSpec: () => currentSpec(false),
+  openSetup: () => { setView(state.remoteOnly ? "settings" : "models"); if (state.remoteOnly) revealSetting($("set-runpod")); },
+  applyPreset: reference => {
+    const p = reference.workload;
+    setGuided(false); setMode('instrumental'); state.takes = 1;
+    for (const button of document.querySelectorAll('[data-n]')) button.classList.toggle('on', Number(button.dataset.n) === 1);
+    const fields = { caption: p.caption, lyrics: '', maxDur: p.duration, seed: p.seed, aLm: p.lm,
+      aSteps: p.steps, aCfg: p.cfg, aBpm: p.bpm, aKey: p.keyscale, aMeter: p.timesignature,
+      aLang: p.language, aPlanTemp: p.planTemperature, aLora: '' };
+    aceCover = null; aceCoverPaint(); $('aCodes').checked = true;
+    for (const [id,value] of Object.entries(fields)) if ($(id)) { $(id).value = String(value); $(id).dispatchEvent(new Event('input', { bubbles: true })); }
+    state.seedLocked = true; paintSeed(); $('maxDur').oninput();
+  } });

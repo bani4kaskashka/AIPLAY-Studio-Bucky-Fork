@@ -84,7 +84,10 @@ const PARAMS =
   + "directly — kick_tune, kick_decay, kick_drive, kick_click, snare_snappy, hat_decay "
   + "and the rest — and so do the big-room synths (bigroom_lead: voices, detune, spread, "
   + "cutoff, filter_amount, filter_decay, resonance, snap, drive...; sub_bass; riser, whose "
-  + "filter opens over the note's own length; impact). daw_patches lists every patch's "
+  + "filter opens over the note's own length; impact; fm_pluck: ratio, index, tone_decay, "
+  + "body, transient, decay, release and spread). SFZ patches offer resample_quality: "
+  + "0 keeps legacy linear playback; 1 uses bandlimited resampling with more CPU. "
+  + "daw_patches lists every patch's "
   + "params with min/max/default/doc, and its presets (named knob settings you send as "
   + "params yourself — hybrid_kick's `bigroom` is the measured big-room kick); "
   + "anything a patch does not declare is dropped on write. Params are part of the "
@@ -293,7 +296,7 @@ export function dawTools(api, safeName) {
           mixer_mode: { type: "string", enum: ["side", "deck"],
             description: "side = a column on the right; deck = across the bottom, which is what fits a whole song's strips." },
           mixer_width: { type: "integer", description: "180-640 px, the side column. Below 180 the gutter and two compact strips no longer fit; above 640 the mixer is wider than the arrangement." },
-          mixer_height: { type: "integer", description: "260-520 px, the deck. 260 is the shortest deck in which a strip does not overflow its own box \u2014 at 200 the solo/mute/arm row lands where it cannot be clicked." },
+          mixer_height: { type: "integer", description: "280-520 px for the bottom mixer deck." },
           mixer_folded: { type: "boolean" },
           mixer_compact: { type: "boolean", description: "Narrow strips: the fader and the meter, without the patch line, the sends and the pan readout. Roughly twice the channels in the same width." },
           browser_width: { type: "integer", description: "160-480 px." },
@@ -1042,7 +1045,7 @@ export function dawTools(api, safeName) {
         const r = await daw({ action: "bounce", slug: slugOf(a.slug), format: a.format, bit_depth: a.bit_depth,
                               target_lufs: a.target_lufs, ceiling_db: a.ceiling_db, max_limit_db: a.max_limit_db });
         return { file: r.file, name: r.name, url: r.url, format: r.format, seconds: r.seconds,
-                 sr: r.sr, channels: r.channels, bit_depth: r.bit_depth, dithered: r.dithered, stereo: r.stereo,
+                 sr: r.sr, channels: r.channels, bit_depth: r.bit_depth, dithered: r.dithered, stereo: r.stereo, output_mode: r.output_mode,
                  target_lufs: r.target_lufs, loudness: r.loudness ?? null, credits: r.credits,
                  ceiling_db: r.ceiling_db, max_limit_db: r.max_limit_db,
                  attribution: r.attribution, tagged: r.tagged, origin: r.origin, ms: r.ms };
@@ -1145,7 +1148,7 @@ export function dawTools(api, safeName) {
             clips: t.clips.length, notes: t.notes, inserts: t.inserts.map((i) => i.type),
           })),
           master_inserts: r.master.inserts.map((i) => i.type),
-          master: { stereo: r.master.stereo, target_lufs: r.master.target_lufs, ceiling_db: r.master.ceiling_db },
+          master: { stereo: r.master.stereo, output_mode: r.master.output_mode, target_lufs: r.master.target_lufs, ceiling_db: r.master.ceiling_db },
           roles: r.roles, notes: r.notes, steps: r.steps, ms: r.ms, note: r.note,
         };
       },

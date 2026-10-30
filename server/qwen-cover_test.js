@@ -18,6 +18,9 @@ const { ArtRunner } = await import("./art.js");
 const { engine } = await import("./engine/client.js");
 const { QWEN_IMAGE_FILES, qwenImageGraph, QWEN_IMAGE_PRESET, QWEN_DRAFT, qwenImageSettings } = await import("./qwen-image.js");
 const { applyPersona, personaFits } = await import("./personas.js");
+const { MOSS_IMAGE_ENGINE, MOSS_IMAGE_PRESET, mossImageOptions } = await import("./moss-image.js");
+const { mossImageStatus } = await import("./moss-status.js");
+const { mossGenerationProvenance } = await import("./moss-provenance.js");
 const { safetyRefusal } = await import("./safety/refusal.js");
 const original = { run: engine.run, socket: engine.socket };
 const submitted = [], preflights = [];
@@ -195,6 +198,7 @@ test("API response, real queue, sampler and saved image provenance keep the same
     json: (_, status, body) => ({ status, body }),
     qwenImageGraph, QWEN_IMAGE_PRESET, QWEN_DRAFT, qwenImageSettings, QWEN_IMAGE_ENGINE: "qwen-image-2.1",
     qwenImageStatus: async () => ({ ready: true }),
+    MOSS_IMAGE_ENGINE, MOSS_IMAGE_PRESET, mossImageOptions, mossImageStatus, mossGenerationProvenance,
     hasWildcards: () => false, expand: (prompt) => ({ prompt, choices: [] }),
     personas: { get: async () => null }, applyPersona, personaFits,
     stageQwenReferences: async (names) => names,
@@ -274,6 +278,7 @@ test("a Fast draft renders the LoRA graph and its picture and ledger line say so
     json: (_, status, body) => ({ status, body }),
     qwenImageGraph, QWEN_IMAGE_PRESET, QWEN_DRAFT, qwenImageSettings, QWEN_IMAGE_ENGINE: "qwen-image-2.1",
     qwenImageStatus: async () => ({ ready: true }),
+    MOSS_IMAGE_ENGINE, MOSS_IMAGE_PRESET, mossImageOptions, mossImageStatus, mossGenerationProvenance,
     hasWildcards: () => false, expand: (prompt) => ({ prompt, choices: [] }),
     personas: { get: async () => null }, applyPersona, personaFits,
     stageQwenReferences: async (names) => names,
@@ -578,4 +583,26 @@ test("every art wait in mcp.js passes the job id the route returned", async () =
   assert.match(src, /import \{ waitForArtJob, emptyResultNote \} from "\.\/art-wait\.js";/);
   assert.match(src, /async function waitForArt\(timeoutMs, kind, jobId\) \{\n\s+return waitForArtJob\(\{ api, sleep, timeoutMs, kind, jobId \}\);/,
     "and the MCP waiter is the shared one, not a copy");
+});
+
+
+test("MOSS accelerated jobs record actual node policy/adapter lineage and Standard restores its original graph", async () => {
+  const originalMossStatus=runner.mossStatus,checks=[];
+  runner.mossStatus=async({options})=>{checks.push(options);return {ready:true};};
+  try {
+    for(const mossPreset of ["spectrum-manual-h1","spectrum-adaptive-h2","turbo-4","dmd-8","standard"]) {
+      const result=await cover(`moss-${mossPreset}.flac`,{video:{engine:"moss-image",mossPreset},seed:19});
+      assert.equal(result.type,"cover",result.event.error);assert.equal(result.event.engine,"moss-image");
+      assert.equal(checks.at(-1).mossPreset,mossPreset);
+      const graph=submitted.at(-1),meta=result.event.imageOptions;
+      assert.equal(meta.shift,5); assert.equal(meta.promptUpsampler,false);
+      if(mossPreset==="standard") {assert.equal(graph[6],undefined); assert.equal(meta.mossPreset,undefined); assert.deepEqual(graph[8].inputs.model,["1",0]);}
+      else {
+        assert.equal(meta.mossPreset,mossPreset);assert.match(meta.mossRecipe,/^[0-9a-f]{64}$/);
+        assert.deepEqual(graph[8].inputs.model,["6",0]);
+        if(mossPreset.startsWith("spectrum")) {assert.equal(meta.spectrum.node,graph[6].class_type);assert.equal(meta.spectrum.policy.debug,true);}
+        else {assert.equal(meta.adapter.filename,graph[6].inputs.lora_name);assert.equal(meta.adapter.strength,1);assert.equal(meta.publisherBf16Equivalent,false);}
+      }
+    }
+  } finally {runner.mossStatus=originalMossStatus;}
 });

@@ -4,6 +4,8 @@
 
 <h1 align="center">AIPLAY Studio</h1>
 
+> **RunPod preview:** keep the studio on your PC and render from the normal Images and Video screens on your own GPU Pod. Start with `npm run start:remote` or **AIPLAY RunPod.cmd**. New users can follow the [beginner quick start](docs/RUNPOD_QUICKSTART.md); technical setup, tests and limitations are in the [complete guide](docs/RUNPOD_SETUP.md). The contributor reports live RunPod validation of checkpoint images and LTX 2.5 text-to-video; see the complete guide for the tested scope and limitations.
+
 <p align="center">
   <b>Make a song. Make it yours.</b><br>
   Generate the track, shape its score, mix it in the DAW and bring it to the screen.<br>
@@ -12,21 +14,42 @@
 
 <p align="center">
   <a href="https://github.com/Senzube4n/AIPLAY-Studio/releases/latest/download/AIPLAY.Studio.Setup.exe"><b>Download for Windows</b></a>
+  &nbsp;·&nbsp; <a href="docs/LINUX_INSTALL.md"><b>Download for Linux</b></a>
+  &nbsp;·&nbsp; <a href="docs/macOS-install.md"><b>macOS preview</b></a>
   &nbsp;·&nbsp; <a href="https://senzube4n.github.io/AIPLAY-Studio/#quick-tour">31-second Studio tour</a>
   &nbsp;·&nbsp; <a href="#yue2-music-only-quickstart">Quickstart</a>
   &nbsp;·&nbsp; <a href="INSTALL.md">Full install</a>
+  &nbsp;·&nbsp; <a href="docs/STUDY_GUIDE.md"><b>Community guide</b></a>
   &nbsp;·&nbsp; <a href="docs/YUE2_GGUF.md">YuE2 guide</a>
   &nbsp;·&nbsp; <a href="docs/DEEP_DIVE.md">How it works</a>
   &nbsp;·&nbsp; <a href="https://github.com/Senzube4n/AIPLAY-Studio/archive/refs/heads/main.zip">Source code (for developers)</a>
 </p>
 
 <p align="center">
-  When the installer asks which build, choose <b>Senzu's</b>.
+  Choose <b>Senzu’s build</b> (the original) or <b>Bucky’s</b> during setup.
 </p>
 
 <p align="center">
-  Windows may say “Windows protected your PC” because the installer is not signed yet: click <b>More info</b>, then <b>Run anyway</b>.
+  The installer is currently unsigned. If antivirus quarantines it, keep it quarantined and use the <a href="INSTALL.md#if-antivirus-blocks-the-installer">source-install alternative</a>; do not disable protection.
 </p>
+
+**Windows Setup 1.5:** download a fresh copy from the button above. It keeps
+the installer file when it closes and installs locked npm dependencies without
+running dependency lifecycle scripts. It checks
+required files and startup imports before replacing an install. If an older
+installer left a `shared` module missing, reinstall into the same folder;
+settings, songs and models are kept. [Repair guide](INSTALL.md#if-the-launcher-says-a-shared-module-is-missing).
+
+**Linux:** desktop packages for Intel/AMD x64 and ARM64 bring their own Node.js.
+Install the `.deb`, then open **AIPLAY Studio** from the application menu.
+Studio downloads and opens its launcher; engines and models remain optional.
+[Linux installation, updates and compatibility](docs/LINUX_INSTALL.md).
+
+**macOS preview:** drag the Apple silicon or Intel app from its `.dmg` into
+Applications. It supplies Node.js for Studio and the DAW. The preview is
+ad-hoc signed, without Developer ID signing or notarization; macOS may block
+it. Local engine/model support is separate.
+[macOS installation and limitations](docs/macOS-install.md).
 
 <p align="center">
   Runs on <b>NVIDIA</b>, <b>AMD</b>, <b>Intel Arc</b> or just your <b>CPU</b>.
@@ -43,6 +66,38 @@ Local generation needs no Studio account or per-render credits. Optional hosted
 engines and API assistants send the inputs they need to your chosen provider;
 paid services use your own key. Software is Apache-2.0. Each model has its own
 licence, shown before installation.
+
+## Current updates
+
+- **Community study guide:** a 20-page screenshot guide to Linux/macOS/Windows
+  installation, YuE2, H3 reference settings, MOSS options and full projects.
+  Open **Community guide** on Studio's Home screen or **About → Getting started**.
+  [Read the guide and download the offline pack](docs/STUDY_GUIDE.md).
+- **MOSS-Image recipes:** Standard, optional Spectrum and 4/8-step presets,
+  Kromoss, and direct 2048 × 2048 HiRes generation. This is a text-to-image
+  path; Standard remains MOSS's default. Qwen Image 2.1 remains the automatic
+  picture choice and the reference/editing engine.
+  [MOSS guide](docs/MOSS_IMAGE.md) · [Spectrum setup](docs/MOSS_SPECTRUM_SETUP.md) ·
+  [Kromoss and HiRes](docs/MOSS_KROMOSS_HIRES.md).
+- **H3 REF2V Turbo V1.1:** eight-step reference renders prefer V1.1 when
+  installed, with V1.0 as fallback. In one matched Singularity V2 comparison on
+  an RTX 4070 Ti SUPER 16 GB at 1344 × 768, 124 frames at 24 fps and eight steps,
+  running time fell from
+  **260.611 s to 246.861 s (5.276%)**. The sampled result changed more of the
+  reference scene; this is one pair, not a general speed or quality ranking.
+  [Recipe and comparison](docs/H3_REF_TURBO.md).
+- **Video favourites:** star saved clips and filter the library to **Starred**,
+  through the UI or MCP, while keeping their media and render history.
+- **Guided Hugging Face setup:** connect in the browser for optional LTX 2.5,
+  check publisher access, then approve installation. A read token remains an
+  option; publisher terms and access approval still apply.
+  [Local model setup](docs/LOCAL_MODEL_SETUP.md).
+
+One local MOSS comparison at 1024 × 1024 on an **RTX 4070 Ti SUPER 16 GB**
+recorded resident-model means of **16.920 s for Standard**, **12.375 s for
+Spectrum H1** and **4.988 s for Turbo 4**, each over two new prompts. These are
+different recipes; faster drafts can change detail and composition. See the
+[comparison settings and first-load timings](docs/MOSS_IMAGE.md#local-comparison-22-october-2026).
 
 <p align="center">
   <img src="GitHubAssets/AIPLAY_banner_1_make-music.png" alt="The Music screen: lyrics, styles and a library of finished songs." width="100%">
@@ -94,9 +149,10 @@ a CUDA 13.3-compatible driver and, if it is missing, the
 The Vulkan and CPU builds bring their own.
 
 1. **Download and run [AIPLAY Studio Setup.exe](https://github.com/Senzube4n/AIPLAY-Studio/releases/latest/download/AIPLAY.Studio.Setup.exe)**.
-   Windows may say “Windows protected your PC” because the installer is not
-   signed yet: click **More info**, then **Run anyway**. When it asks which
-   build, choose **Senzu's**; then a folder, where the default is right. No
+   The installer is currently unsigned. If antivirus blocks it, use the
+   [source-install alternative](INSTALL.md#if-antivirus-blocks-the-installer).
+   Choose **Senzu's build**;
+   then choose a folder, where the default is right. No
    admin prompt.
    (Developers: the [source ZIP](https://github.com/Senzube4n/AIPLAY-Studio/archive/refs/heads/main.zip) works too; open the extracted folder,
    not the ZIP viewer.)
@@ -161,8 +217,8 @@ and hardware requirements.
 | 💬 **Chat and Simple mode** | Describe the song you want in plain words and let the assistant write the lyrics, style and title for you. |
 | ✨ **Enhance and galleries** | One click turns a rough style line or lyrics into a fuller one. Save the ones you like and reuse them later. |
 | 🎰 **Genre Roulette** | Spin six reels (genre, vocals, instrument, mood, rhythm, production) when you have no idea where to start. |
-| 🖼️ **Covers, layers and vectors** | Generate cover art with Qwen Image 2.1 when installed, or choose another available engine. Use the layer image editor for masks, selections and text. Trace a raster to SVG, review detail crops and clean selected geometry through the UI or MCP. [Vector workflow](docs/vector.md). |
-| 🎬 **Video and Production** | Generate individual clips or plan a whole project on the **Production** screen: scenes, cast, reference sheets, storyboards, saved takes and a timeline to finish. Music videos and episode projects use the same tools; for a series, carry the bible and chosen references between episode projects. Block a camera in Blender for the render to follow. |
+| 🖼️ **Covers, layers and vectors** | Generate with [MOSS-Image and its optional presets](docs/MOSS_IMAGE.md), or use Qwen Image 2.1 for references and edits. Use the layer image editor for masks, selections and text. Trace a raster to SVG, review detail crops and clean selected geometry through the UI or MCP. [Vector workflow](docs/vector.md). |
+| 🎬 **Video and Production** | Generate clips with routes including [H3 REF2V Turbo V1.1](docs/H3_REF_TURBO.md), star favourite takes, or plan a whole project on **Production**: scenes, cast, reference sheets, storyboards, saved takes and a timeline to finish. For a series, carry the bible and chosen references between episode projects. Block a camera in Blender for the render to follow. |
 | 🌀 **Reactive** | Pictures that move with a song: cut on the beat, pulse with the bass, flash on the hits. Five cut-and-dissolve styles run on the compositor alone and work on any card, AMD included. Two more repaint a clip frame by frame so the figure moves and the look turns with the music, with a black circle that opens on the bass. |
 | ⚭ **Collab** | Make an episode with friends, and **lend each other a graphics card**. A project or one scene travels as a sealed file addressed to one person; an order asking a friend to render a scene carries four words and nothing else, and the take comes home to quarantine for you to adopt or throw away. Nothing on the screen opens a connection and there is no server in it. See [COLLAB.md](docs/COLLAB.md). |
 | ◎ **Community sessions** | Open the pinned **Community** entry to find public live listening rooms and upcoming events, or borrow a style pack for your next song. Browsing does not publish your local creations. |
@@ -269,6 +325,15 @@ Nothing downloads on its own. The **Models** screen reads your card and memory,
 tells you what your machine can run, and fetches what you ask for, resuming if
 the connection drops and checking every file when it arrives.
 
+For optional MOSS pictures, [the SFT guide](docs/MOSS_IMAGE.md) covers Standard
+and the tested acceleration presets. [Kromoss and HiRes](docs/MOSS_KROMOSS_HIRES.md)
+add explicit checkpoint, eight-step DMD2 and 2048-square HiRes choices without
+changing Standard or a saved image default. HiRes's publisher has not supplied
+an explicit adapter licence; Models records its terms as unknown.
+
+For H3 reference videos, [REF2V Turbo versions](docs/H3_REF_TURBO.md) explains
+the V1.1 preference, V1.0 fallback and the scope of the comparison.
+
 <details>
 <summary><b>Every model, with its size, licence and hardware needs</b></summary>
 
@@ -283,6 +348,7 @@ the connection drops and checking every file when it arrives.
 | Cover — SheetSage2 song-to-score (ComfyUI) | 1.4 GB | CC BY-NC 4.0 (weights) · ⚠ not for sale | 4 GB (8 rec) | 8 GB (16 rec) |
 | Video clips — TaoMate 3-step LoRA (H3) | 2.5 GB | MiniMax H3 Community Licence (derived from H3) · ⚠ territory | 8 GB (12 rec) | 16 GB (32 rec) |
 | Video clips — video-to-video control (H3 Fun ControlNet) | 2.3 GB | MiniMax H3 Community Licence (a patch on H3's weights) · ⚠ territory | 12 GB (16 rec) | 16 GB (32 rec) |
+| Video clips — full-width H3 video-to-video control (6.81 GB) | 6.8 GB | MiniMax H3 Community Licence (a patch on H3's weights) · ⚠ territory | 12 GB (16 rec) | 16 GB (32 rec) |
 | Video clips — Fast setting for H3 (TaoMate 3-step, 182 MB) | 182 MB | MiniMax H3 Community Licence (derived from H3) · ⚠ territory | 8 GB (12 rec) | 16 GB (32 rec) |
 | Video clips — 4-step speed-up for H3 (1.96 GB) | 2.0 GB | MiniMax H3 Community Licence (derived from H3) · ⚠ territory | 8 GB (12 rec) | 16 GB (32 rec) |
 | Video clips — 8-step speed-up for H3 (1.96 GB) | 2.0 GB | MiniMax H3 Community Licence (derived from H3) · ⚠ territory | 8 GB (12 rec) | 16 GB (32 rec) |
@@ -301,12 +367,19 @@ the connection drops and checking every file when it arrives.
 | Stem separation — HTDemucs (fine-tuned) | ~336 MB | MIT · pip | 4 GB (6 rec) | 8 GB (16 rec) |
 | Video clips — MiniMax H3 (quantised) | 42.9 GB | MiniMax H3 Community · ⚠ territory | 8 GB (12 rec) | 16 GB (32 rec) |
 | Video clips — FastH3 (8 steps, experimental) | 42.1 GB | MiniMax H3 Community Licence (derived from H3) · ⚠ territory | 8 GB (12 rec) | 16 GB (32 rec) |
-| Video references — MiniMax H3 ref2va | 22.9 GB | MiniMax H3 Community · ⚠ territory | 8 GB (12 rec) | 16 GB (32 rec) |
+| Video references — MiniMax H3 ref2va | 24.9 GB | MiniMax H3 Community · ⚠ territory | 8 GB (12 rec) | 16 GB (32 rec) |
 | Background removal — BiRefNet | 444 MB | MIT | 4 GB (6 rec) | 8 GB (16 rec) |
 | Images — Ideogram 4 (open 9B) | 25.2 GB | Ideogram Non-Commercial Model Agreement · ⚠ terms unread | 12 GB (16 rec) | 32 GB (32 rec) |
 | Narration — TTS voices (Kokoro + Qwen3-TTS) | ~15.5 GB | Apache-2.0 (both engines) · pip | none (8 rec) | 16 GB (32 rec) |
 | Sound effects — Stable Audio 3 Small SFX | 3.5 GB | Stability AI Community License | 6 GB (8 rec) | 16 GB (32 rec) |
 | Images — Z-Image Turbo (Apache-2.0) | 14.6 GB | Apache-2.0 | 8 GB (12 rec) | 16 GB (32 rec) |
+| MOSS-Image SFT (experimental) | 13.0 GB | Apache-2.0 | Unknown (experimental) | Unknown (experimental) |
+| Kromoss INT8 (experimental) | 5.4 GB | Apache-2.0 | Unknown (experimental) | Unknown (experimental) |
+| MOSS-Image Turbo 4 (experimental) | 1.2 GB | Apache-2.0 | Unknown (experimental) | Unknown (experimental) |
+| MOSS-Image DMD 8 (experimental) | 1.2 GB | Apache-2.0 | Unknown (experimental) | Unknown (experimental) |
+| Kromoss DMD2 8 (experimental) | 1.2 GB | Apache-2.0 | Unknown (experimental) | Unknown (experimental) |
+| MOSS HiRes v0.3 (experimental) | 182 MB | Not supplied by publisher · ⚠ terms unread | Unknown (experimental) | Unknown (experimental) |
+| MOSS NSFW Uncensored (optional) | 74.4 MB | Apache-2.0 | Unknown (experimental) | Unknown (experimental) |
 | Images — Qwen Image 2.1 (research licence) | 17.3 GB | Qwen Research License Agreement · ⚠ not for sale | Unknown (experimental) | Unknown (experimental) |
 | Images — Fast draft for Qwen Image 2.1 (Viggle turbo LoRA) | 680 MB | Qwen Research License Agreement · ⚠ not for sale | Unknown (experimental) | Unknown (experimental) |
 | Images — Krea 2 Turbo (community licence) | 19.0 GB | Krea 2 Community License Agreement | 12 GB (16 rec) | 32 GB (48 rec) |
@@ -328,6 +401,10 @@ the connection drops and checking every file when it arrives.
 | Whisper: transcription and timed lyrics | ~3.1 GB | MIT · pip | 4 GB (6 rec) | 8 GB (16 rec) |
 | Smooth motion — RIFE 4.26 | 22.7 MB | MIT | 4 GB (6 rec) | 8 GB (16 rec) |
 | Upscale — Real-ESRGAN 2x | 67.1 MB | BSD-3-Clause | 4 GB (8 rec) | 16 GB (32 rec) |
+| Music engine · ACE-Step 1.5 XL-SFT (experimental) | 19.9 GB | MIT (ACE-Step's LICENSE; the ComfyUI repack's card tags apache-2.0 with no licence text) | Unknown (experimental) | Unknown (experimental) |
+| Music engine · ACE-Step 1.5 XL-Turbo (experimental) | 19.9 GB | MIT (ACE-Step's LICENSE; the ComfyUI repack's card tags apache-2.0 with no licence text) | Unknown (experimental) | Unknown (experimental) |
+| Music engine · ACE-Step 1.5 XL-Base (experimental) | 19.9 GB | MIT (ACE-Step's LICENSE; the ComfyUI repack's card tags apache-2.0 with no licence text) | Unknown (experimental) | Unknown (experimental) |
+| Pictures · SDXL Turbo (fp16) | 6.9 GB | Stability AI model terms (review repository) · ⚠ terms unread | 8 GB (12 rec) | 16 GB (32 rec) |
 | MiniMax H3 fl2va W6A8 (experimental) | 16.0 GB | MiniMax H3 Community · ⚠ territory | Unknown (experimental) | Unknown (experimental) |
 | MiniMax H3 ref2va W6A8 (experimental) | 16.0 GB | MiniMax H3 Community · ⚠ territory | Unknown (experimental) | Unknown (experimental) |
 | YuE2 style LoRA — TRBDR Broadside | 118 MB | CC BY-NC 4.0 (adapter weights) · ⚠ not for sale | 8 GB (12 rec) | 16 GB (32 rec) |
@@ -342,19 +419,27 @@ the connection drops and checking every file when it arrives.
 | YuE2 style LoRA — GRVL Thunder | 118 MB | CC BY-NC 4.0 (adapter weights) · ⚠ not for sale | 8 GB (12 rec) | 16 GB (32 rec) |
 | YuE2 style LoRA — GRVL Tempest | 118 MB | CC BY-NC 4.0 (adapter weights) · ⚠ not for sale | 8 GB (12 rec) | 16 GB (32 rec) |
 
-63 capabilities. **Choose one music engine** and install the runtime and models for the features you want. Native YuE2 music-only does not require MiniMax, ComfyUI or Python. Hardware figures are capability-specific guidance, not a guarantee; an experimental Unknown means no minimum has been established. Streaming support and memory measurements from other engines must not be applied to native GGUF.
+75 capabilities. **Choose one music engine** and install the runtime and models for the features you want. Native YuE2 music-only does not require MiniMax, ComfyUI or Python. Hardware figures are capability-specific guidance, not a guarantee; an experimental Unknown means no minimum has been established. Streaming support and memory measurements from other engines must not be applied to native GGUF.
 
-⚠ **territory** — **TaoMate 3-step LoRA (H3) and Fast setting for H3 (TaoMate 3-step, 182 MB) and 4-step speed-up for H3 (1.96 GB) and 8-step speed-up for H3 (1.96 GB) and BUNNY (action logic) and Semantic Bridge v1.** Derived from MiniMax H3, so its Community Licence applies: rights only inside the Applicable Territory, which excludes the EU, the UK, the Republic of Korea and the United States of America. The download goes straight to the publisher. **video-to-video control (H3 Fun ControlNet).** A patch on MiniMax H3, so its Community Licence applies unchanged: rights only inside the Applicable Territory, which excludes the EU, the UK, the Republic of Korea and the United States of America. MiniMax's hosted API is available everywhere; it is running the open weights locally that is limited. The download goes straight to the publisher. **MiniMax H3 (quantised) and MiniMax H3 ref2va and MiniMax H3 fl2va W6A8 (experimental) and MiniMax H3 ref2va W6A8 (experimental).** MiniMax grants H3 rights only inside its Applicable Territory, which excludes the EU, the UK, the Republic of Korea and the United States of America. If you are in one of those places you may not use these weights — and §V.4 says the same about anything they generate. AIPLAY Studio does not host them — the download goes straight to the publisher, and the licence is between you and MiniMax. **FastH3 (8 steps, experimental).** Derived from MiniMax H3, so its Community Licence applies: rights only inside the Applicable Territory, which excludes the EU, the UK, the Republic of Korea and the United States of America. AIPLAY Studio does not host the weights; the download goes straight to the publisher. Studio treats this as a blocking acknowledgement and refuses the download without it.
+⚠ **territory** — **TaoMate 3-step LoRA (H3) and Fast setting for H3 (TaoMate 3-step, 182 MB) and 4-step speed-up for H3 (1.96 GB) and 8-step speed-up for H3 (1.96 GB) and BUNNY (action logic) and Semantic Bridge v1.** Derived from MiniMax H3, so its Community Licence applies: rights only inside the Applicable Territory, which excludes the EU, the UK, the Republic of Korea and the United States of America. The download goes straight to the publisher. **video-to-video control (H3 Fun ControlNet) and full-width H3 video-to-video control (6.81 GB).** A patch on MiniMax H3, so its Community Licence applies unchanged: rights only inside the Applicable Territory, which excludes the EU, the UK, the Republic of Korea and the United States of America. MiniMax's hosted API is available everywhere; it is running the open weights locally that is limited. The download goes straight to the publisher. **MiniMax H3 (quantised) and MiniMax H3 ref2va and MiniMax H3 fl2va W6A8 (experimental) and MiniMax H3 ref2va W6A8 (experimental).** MiniMax grants H3 rights only inside its Applicable Territory, which excludes the EU, the UK, the Republic of Korea and the United States of America. If you are in one of those places you may not use these weights — and §V.4 says the same about anything they generate. AIPLAY Studio does not host them — the download goes straight to the publisher, and the licence is between you and MiniMax. **FastH3 (8 steps, experimental).** Derived from MiniMax H3, so its Community Licence applies: rights only inside the Applicable Territory, which excludes the EU, the UK, the Republic of Korea and the United States of America. AIPLAY Studio does not host the weights; the download goes straight to the publisher. Studio treats this as a blocking acknowledgement and refuses the download without it.
 
-⚠ **gated** — **LTX 2.5 (quantised).** The repository is access-gated, so the built-in downloader cannot fetch it — it has no token and deliberately nowhere to keep one. Accept the licence on the model page, then in the ComfyUI python environment run `hf auth login` followed by `python scripts/fetch_ltx25.py`. About 40 GB. Licence and access: https://huggingface.co/Lightricks/LTX-2.5
+**Optional models requiring an account** — **LTX 2.5 (quantised).** This is optional, not a required Studio installation step. Optional LTX model. Open Models > Set up LTX, approve access on the publisher's page, connect Hugging Face, then install. About 40 GB. Licence and access: https://huggingface.co/Lightricks/LTX-2.5
 
 ⚠ **terms unread** — **Ideogram 4 (open 9B)** — https://huggingface.co/ideogram-ai/ideogram-4-fp8/blob/main/LICENSE.md
 
 The Ideogram Non-Commercial Model Agreement is behind a gate: the URL above returns HTTP 401 to an anonymous request (checked 2026-08-27) and no copy of the text has been read here. The name says non-commercial; every other non-commercial licence in this catalogue restricts the MODEL and leaves the output alone — but Ideogram's may not, and Studio will not guess in either direction. Accept the agreement on the model page, read §-by-§, and decide. If you need a settled answer today, FLUX.2 klein 4B is Apache-2.0.
 
+**MOSS HiRes v0.3 (experimental)** — https://huggingface.co/comfyanonymous/MOSS_image_MAX_ULTRA_hires_lora_test/tree/9af7b1f3d135ce132cc6c4b8147030efff19507f
+
+MOSS SFT's Apache-2.0 licence does not establish separate adapter terms. Check with the adapter publisher before commercial use.
+
 **DWPose (TorchScript)** — https://github.com/IDEA-Research/DWPose/blob/main/LICENSE
 
-Half of this capability is verified and half is not, and the unread half is the one that makes the skeleton, so the row answers with the weaker of the two. The detector (yolox_l.torchscript.pt) is Apache-2.0: Megvii's own LICENSE was diffed against the canonical text and every operative clause is identical. The estimator (dw-ll_ucoco_384_bs5.torchscript.pt) has no readable terms at all — its redistributor's entire model card is 28 bytes of frontmatter with no LICENSE file, and so is the card of the yzd-v/DWPose repository usually named as its origin. The Apache-2.0 licence linked above, IDEA-Research's, is reached only by a filename match, and a filename is not a grant. In practice a skeleton is a measurement of a video you supplied, and the clip it goes on to steer carries the RENDERING model's terms — WAN 2.1 VACE's, which are settled Apache-2.0 — so this is narrower than it sounds. Read the chain yourself before relying on the skeleton itself being licensed. Separately, and binding whoever trained the model rather than whoever runs it: DWPose was trained on COCO-WholeBody and UBody, which carry dataset terms of their own.
+Half of this capability is verified and half is not, and the unread half is the one that makes the skeleton, so the row answers with the weaker of the two. The detector (yolox_l.torchscript.pt) is Apache-2.0: Megvii's own LICENSE was diffed against the canonical text and every operative clause is identical. The estimator (dw-ll_ucoco_384_bs5.torchscript.pt) has no readable terms at all — its redistributor's entire model card is 28 bytes of frontmatter with no LICENSE file, and so is the card of the yzd-v/DWPose repository usually named as its origin. The Apache-2.0 licence linked above, IDEA-Research's, is reached only by a filename match, and a filename is not a grant. In practice a skeleton is a measurement of a video you supplied, and the clip it goes on to steer carries the rendering model's own terms, including H3's territory terms when used with H3, so this is narrower than it sounds. Read the chain yourself before relying on the skeleton itself being licensed. Separately, and binding whoever trained the model rather than whoever runs it: DWPose was trained on COCO-WholeBody and UBody, which carry dataset terms of their own.
+
+**Pictures · SDXL Turbo (fp16)** — https://huggingface.co/stabilityai/sdxl-turbo
+
+Review the publisher’s current model terms before use.
 
 ⚠ **not for sale** — **SheetSage2 song-to-score (ComfyUI).** Studio retains a conservative noncommercial / not-for-sale classification. This does not establish that every generated output is governed by the weights' licence. Review the source terms and output scope: https://huggingface.co/m-a-p/SheetSage2/blob/main/LICENSE. **YuE2 instrumental planner LoRA (ComfyUI).** Studio retains a conservative noncommercial / not-for-sale classification. This does not establish that every generated output is governed by the weights' licence. Review the source terms and output scope: https://huggingface.co/m-a-p/YuE2-3B/blob/main/LICENSE. **YuE2 real-audio NAR LoRA (ComfyUI).** Studio retains a conservative noncommercial / not-for-sale classification. This does not establish that every generated output is governed by the weights' licence. Review the source terms and output scope: https://huggingface.co/m-a-p/YuE2-3B/blob/main/LICENSE. **YuE2 real-audio tokenizer (head + MERT-v2-FullSong).** Studio retains a conservative noncommercial / not-for-sale classification. This does not establish that every generated output is governed by the weights' licence. Review the source terms and output scope: https://huggingface.co/m-a-p/YuE2-3B/blob/main/LICENSE. **Qwen Image 2.1 (research licence).** Studio retains a conservative noncommercial / not-for-sale classification. This does not establish that every generated output is governed by the weights' licence. Review the source terms and output scope: https://huggingface.co/Qwen/Qwen-Image-2.1/blob/790c92633540aa0cb11d9abf19eb46d861714758/LICENSE. **Fast draft for Qwen Image 2.1 (Viggle turbo LoRA).** Studio retains a conservative noncommercial / not-for-sale classification. This does not establish that every generated output is governed by the weights' licence. Review the source terms and output scope: https://huggingface.co/Viggle/Qwen-Image-2.1-viggle-turbo/blob/2b85c1fcb7b2584c4133fe0c547ec968ff2ae20e/LICENSE. **Depth Anything V2 Large (non-commercial).** Studio retains a conservative noncommercial / not-for-sale classification. This does not establish that every generated output is governed by the weights' licence. Review the source terms and output scope: https://github.com/DepthAnything/Depth-Anything-V2#license. **TRBDR Broadside.** Studio retains a conservative noncommercial / not-for-sale classification. This does not establish that every generated output is governed by the weights' licence. Review the source terms and output scope: https://huggingface.co/becausereasons/yue2-trbdr-folk-troubadour/blob/078b19e52baebaa71463ea94afac5ce13abfe29a/README.md. **TRBDR Lantern.** Studio retains a conservative noncommercial / not-for-sale classification. This does not establish that every generated output is governed by the weights' licence. Review the source terms and output scope: https://huggingface.co/becausereasons/yue2-trbdr-folk-troubadour/blob/078b19e52baebaa71463ea94afac5ce13abfe29a/README.md. **TRBDR Hearth.** Studio retains a conservative noncommercial / not-for-sale classification. This does not establish that every generated output is governed by the weights' licence. Review the source terms and output scope: https://huggingface.co/becausereasons/yue2-trbdr-folk-troubadour/blob/078b19e52baebaa71463ea94afac5ce13abfe29a/README.md. **TRBDR Ferryman.** Studio retains a conservative noncommercial / not-for-sale classification. This does not establish that every generated output is governed by the weights' licence. Review the source terms and output scope: https://huggingface.co/becausereasons/yue2-trbdr-folk-troubadour/blob/078b19e52baebaa71463ea94afac5ce13abfe29a/README.md. **TRBDR Porch.** Studio retains a conservative noncommercial / not-for-sale classification. This does not establish that every generated output is governed by the weights' licence. Review the source terms and output scope: https://huggingface.co/becausereasons/yue2-trbdr-folk-troubadour/blob/078b19e52baebaa71463ea94afac5ce13abfe29a/README.md. **GRVL Ember.** Studio retains a conservative noncommercial / not-for-sale classification. This does not establish that every generated output is governed by the weights' licence. Review the source terms and output scope: https://huggingface.co/becausereasons/yue2-grvl-raspy-rock-soul/blob/314dbcf2779e92b1b04e8539f4c2ceee3516f969/README.md. **GRVL Smoulder.** Studio retains a conservative noncommercial / not-for-sale classification. This does not establish that every generated output is governed by the weights' licence. Review the source terms and output scope: https://huggingface.co/becausereasons/yue2-grvl-raspy-rock-soul/blob/314dbcf2779e92b1b04e8539f4c2ceee3516f969/README.md. **GRVL Cinder.** Studio retains a conservative noncommercial / not-for-sale classification. This does not establish that every generated output is governed by the weights' licence. Review the source terms and output scope: https://huggingface.co/becausereasons/yue2-grvl-raspy-rock-soul/blob/314dbcf2779e92b1b04e8539f4c2ceee3516f969/README.md. **GRVL Wildfire.** Studio retains a conservative noncommercial / not-for-sale classification. This does not establish that every generated output is governed by the weights' licence. Review the source terms and output scope: https://huggingface.co/becausereasons/yue2-grvl-raspy-rock-soul/blob/314dbcf2779e92b1b04e8539f4c2ceee3516f969/README.md. **GRVL Thunder.** Studio retains a conservative noncommercial / not-for-sale classification. This does not establish that every generated output is governed by the weights' licence. Review the source terms and output scope: https://huggingface.co/becausereasons/yue2-grvl-raspy-rock-soul/blob/314dbcf2779e92b1b04e8539f4c2ceee3516f969/README.md. **GRVL Tempest.** Studio retains a conservative noncommercial / not-for-sale classification. This does not establish that every generated output is governed by the weights' licence. Review the source terms and output scope: https://huggingface.co/becausereasons/yue2-grvl-raspy-rock-soul/blob/314dbcf2779e92b1b04e8539f4c2ceee3516f969/README.md.
 
@@ -370,9 +455,9 @@ Half of this capability is verified and half is not, and the unread half is the 
 
 `node scripts/extras_setup.mjs` prints the exact command for your machine, aimed at the interpreter Studio will actually invoke, and says which are already installed.
 
-**selling what you make** — Model licences and rights in generated material are separate questions. The catalogue records them separately. 20 of 63 are classified as placing no licence conditions on generated material (ACE-Step 1.5 turbo (ComfyUI), FLUX.2 klein 4B, Fast covers: Supra2-IMG, Qwen3 4B, HTDemucs (fine-tuned), BiRefNet, TTS voices (Kokoro + Qwen3-TTS), Z-Image Turbo (Apache-2.0), Z-Image base (Apache-2.0), WAN 2.1 VACE 1.3B, Depth Anything V2 Small, AnimateDiff v3 (SD1.5), SparseCtrl RGB (AnimateDiff v3), IP-Adapter Plus (SD1.5), ViT-H/14 (LAION-2B), TripoSG 1.5B, UniRig, Whisper: transcription and timed lyrics, RIFE 4.26, Real-ESRGAN 2x). 23 say you may and attach conditions (MiniMax Music 3, YuE2 GGUF Q4 / optional Q8 (experimental), TaoMate 3-step LoRA (H3), video-to-video control (H3 Fun ControlNet), Fast setting for H3 (TaoMate 3-step, 182 MB), 4-step speed-up for H3 (1.96 GB), 8-step speed-up for H3 (1.96 GB), BUNNY (action logic), Semantic Bridge v1, YuE2 3B for ComfyUI (int8), YuE2 3B, MiniMax Music 3 DAV encoder, MiniMax H3 (quantised), FastH3 (8 steps, experimental), MiniMax H3 ref2va, Stable Audio 3 Small SFX, Krea 2 Turbo (community licence), Anima (non-commercial model, sellable pictures), LTX 2.5 (quantised), DreamShaper 8 (the Motion look's painter), depth and line art (SD1.5, fp16), MiniMax H3 fl2va W6A8 (experimental), MiniMax H3 ref2va W6A8 (experimental)). 18 are conservatively classified noncommercial / not for sale; that label does not resolve every output's legal status. 2 — Ideogram 4 (open 9B), DWPose (TorchScript) — nobody here has read. For MiniMax Music 3: §3.1 — a commercial product or service that uses it must show “MiniMax-Music3” prominently in its interface. That is why the name sits in Studio's corner rather than on a credits page. The operative sentence is quoted verbatim in `server/models.js` and shown on the Models screen before you download anything.
+**selling what you make** — Model licences and rights in generated material are separate questions. The catalogue records them separately. 29 of 75 are classified as placing no licence conditions on generated material (ACE-Step 1.5 turbo (ComfyUI), FLUX.2 klein 4B, Fast covers: Supra2-IMG, Qwen3 4B, HTDemucs (fine-tuned), BiRefNet, TTS voices (Kokoro + Qwen3-TTS), Z-Image Turbo (Apache-2.0), MOSS-Image SFT (experimental), Kromoss INT8 (experimental), MOSS-Image Turbo 4 (experimental), MOSS-Image DMD 8 (experimental), Kromoss DMD2 8 (experimental), MOSS NSFW Uncensored (optional), Z-Image base (Apache-2.0), WAN 2.1 VACE 1.3B, Depth Anything V2 Small, AnimateDiff v3 (SD1.5), SparseCtrl RGB (AnimateDiff v3), IP-Adapter Plus (SD1.5), ViT-H/14 (LAION-2B), TripoSG 1.5B, UniRig, Whisper: transcription and timed lyrics, RIFE 4.26, Real-ESRGAN 2x, Music engine · ACE-Step 1.5 XL-SFT (experimental), Music engine · ACE-Step 1.5 XL-Turbo (experimental), Music engine · ACE-Step 1.5 XL-Base (experimental)). 24 say you may and attach conditions (MiniMax Music 3, YuE2 GGUF Q4 / optional Q8 (experimental), TaoMate 3-step LoRA (H3), video-to-video control (H3 Fun ControlNet), full-width H3 video-to-video control (6.81 GB), Fast setting for H3 (TaoMate 3-step, 182 MB), 4-step speed-up for H3 (1.96 GB), 8-step speed-up for H3 (1.96 GB), BUNNY (action logic), Semantic Bridge v1, YuE2 3B for ComfyUI (int8), YuE2 3B, MiniMax Music 3 DAV encoder, MiniMax H3 (quantised), FastH3 (8 steps, experimental), MiniMax H3 ref2va, Stable Audio 3 Small SFX, Krea 2 Turbo (community licence), Anima (non-commercial model, sellable pictures), LTX 2.5 (quantised), DreamShaper 8 (the Motion look's painter), depth and line art (SD1.5, fp16), MiniMax H3 fl2va W6A8 (experimental), MiniMax H3 ref2va W6A8 (experimental)). 18 are conservatively classified noncommercial / not for sale; that label does not resolve every output's legal status. 4 — Ideogram 4 (open 9B), MOSS HiRes v0.3 (experimental), DWPose (TorchScript), Pictures · SDXL Turbo (fp16) — nobody here has read. For MiniMax Music 3: §3.1 — a commercial product or service that uses it must show “MiniMax-Music3” prominently in its interface. That is why the name sits in Studio's corner rather than on a credits page. The operative sentence is quoted verbatim in `server/models.js` and shown on the Models screen before you download anything.
 
-**shared files** — 8 files are used by more than one capability, so picking two of those costs less than adding their rows — up to 30.9 GB less. `qwen3vl_32b_minimax_h3-int4_convrot.safetensors` (14.2 GB) is shared by MiniMax H3 (quantised), FastH3 (8 steps, experimental); `qwen_3_4b.safetensors` (8.0 GB) is shared by FLUX.2 klein 4B, Qwen3 4B, Z-Image Turbo (Apache-2.0), Z-Image base (Apache-2.0); `minimax_h3_video_vae_fp16.safetensors` (5.2 GB) is shared by MiniMax H3 (quantised), FastH3 (8 steps, experimental); `minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors` (2.0 GB) is shared by 8-step speed-up for H3 (1.96 GB), MiniMax H3 (quantised); `minimax_h3_audio_vae_fp32.safetensors` (605 MB) is shared by MiniMax H3 (quantised), FastH3 (8 steps, experimental); `flux2-vae.safetensors` (336 MB) is shared by FLUX.2 klein 4B, Ideogram 4 (open 9B); `ae.safetensors` (335 MB) is shared by Z-Image Turbo (Apache-2.0), Z-Image base (Apache-2.0); `qwen_image_vae.safetensors` (254 MB) is shared by Krea 2 Turbo (community licence), Anima (non-commercial model, sellable pictures). The Models screen quotes the deduplicated figure.
+**shared files** — 11 files are used by more than one capability, so picking two of those costs less than adding their rows — up to 40.8 GB less. `qwen3vl_32b_minimax_h3-int4_convrot.safetensors` (14.2 GB) is shared by MiniMax H3 (quantised), FastH3 (8 steps, experimental); `qwen_4b_ace15.safetensors` (8.4 GB) is shared by ACE-Step 1.5 turbo (ComfyUI), Music engine · ACE-Step 1.5 XL-SFT (experimental), Music engine · ACE-Step 1.5 XL-Turbo (experimental), Music engine · ACE-Step 1.5 XL-Base (experimental); `qwen_3_4b.safetensors` (8.0 GB) is shared by FLUX.2 klein 4B, Qwen3 4B, Z-Image Turbo (Apache-2.0), Z-Image base (Apache-2.0); `minimax_h3_video_vae_fp16.safetensors` (5.2 GB) is shared by MiniMax H3 (quantised), FastH3 (8 steps, experimental); `minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors` (2.0 GB) is shared by 8-step speed-up for H3 (1.96 GB), MiniMax H3 (quantised); `qwen_0.6b_ace15.safetensors` (1.2 GB) is shared by ACE-Step 1.5 turbo (ComfyUI), Music engine · ACE-Step 1.5 XL-SFT (experimental), Music engine · ACE-Step 1.5 XL-Turbo (experimental), Music engine · ACE-Step 1.5 XL-Base (experimental); `minimax_h3_audio_vae_fp32.safetensors` (605 MB) is shared by MiniMax H3 (quantised), FastH3 (8 steps, experimental); `ace_1.5_vae.safetensors` (337 MB) is shared by ACE-Step 1.5 turbo (ComfyUI), Music engine · ACE-Step 1.5 XL-SFT (experimental), Music engine · ACE-Step 1.5 XL-Turbo (experimental), Music engine · ACE-Step 1.5 XL-Base (experimental); `flux2-vae.safetensors` (336 MB) is shared by FLUX.2 klein 4B, Ideogram 4 (open 9B); `ae.safetensors` (335 MB) is shared by Z-Image Turbo (Apache-2.0), Z-Image base (Apache-2.0); `qwen_image_vae.safetensors` (254 MB) is shared by Krea 2 Turbo (community licence), Anima (non-commercial model, sellable pictures). The Models screen quotes the deduplicated figure.
 
 Studio hosts no weights and mirrors none: every download goes straight to the publisher, and the licence is between you and them.
 <!-- MODELS:END -->

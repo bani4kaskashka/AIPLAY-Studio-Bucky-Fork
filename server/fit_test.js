@@ -38,11 +38,16 @@
  */
 import path from "node:path";
 import os from "node:os";
-import { readFileSync } from "node:fs";
-import { readMachine, fitFor, recommendFor, bytesFor, FIT_STATES } from "./fit.js";
-import { CATALOG, MODEL_TO_CAPABILITY, isPictureModel, modelLabel, modelPageUrl, engineFromModelFile } from "./models.js";
-import { config } from "./config.js";
-import { resolveVideoEngine } from "./workflow.js";
+import { readFileSync, mkdtempSync, rmSync } from "node:fs";
+// These are fresh-install fixtures. Read no saved music/model selection from
+// the developer's installation (an XL-SFT selection changes download totals).
+const testData = mkdtempSync(path.join(os.tmpdir(), "aiplay-fit-"));
+process.env.AIPLAY_APPDATA = testData;
+process.on("exit", () => rmSync(testData, { recursive: true, force: true }));
+const { readMachine, fitFor, recommendFor, bytesFor, FIT_STATES } = await import("./fit.js");
+const { CATALOG, MODEL_TO_CAPABILITY, isPictureModel, modelLabel, modelPageUrl, engineFromModelFile } = await import("./models.js");
+const { config } = await import("./config.js");
+const { resolveVideoEngine } = await import("./workflow.js");
 
 let pass = 0;
 const failures = [];
@@ -258,8 +263,8 @@ ok("a no-card machine that misses the RAM floor is still told so",
 console.log("\n── the gated model must never be recommended ────────────────────");
 
 /* Six machines, including two absurd ones, because this is the rule that broke.
- * A recommendation is a button somebody presses; there is no button for a gated
- * repo, and there deliberately never will be. */
+ * Publisher account setup is an explicit optional action, never a starter
+ * recommendation or an automatic download. */
 const ALL = [
   ...Object.values(MACHINES),
   readMachine({ name: "RTX 5090", totalMb: 32760, usedMb: 0 }, { totalMb: 131072, usedMb: 0 }),
@@ -279,9 +284,11 @@ for (const machine of ALL) {
 ok("no machine, however large, is ever recommended a gated model",
   leaked.length === 0, leaked.join("; "));
 
-ok("the gated one is still MENTIONED, with the publisher's own hand-fetch steps",
-  rec.rig.out.notes.some((n) => n.slot === "video-gated" && /hf auth login/.test(n.detail)),
-  "a model somebody could get by hand should not vanish from the page");
+ok("the gated one is an OPTIONAL aside with guided setup rather than terminal commands",
+  rec.rig.out.notes.some((n) => n.slot === "video-gated" && n.optional === true
+    && /Optional/.test(n.headline) && /Models/.test(n.detail)
+    && !/hf auth login|fetch_ltx25|python environment/.test(n.detail)),
+  "optional model access must not look like an unfinished standard installation");
 
 /* ── and the default that started it ──────────────────────────────────────
  *
@@ -392,9 +399,9 @@ const planted = {
 };
 ok("a capability of an unrecognised kind is not a picture model",
   !isPictureModel(planted) && !isPictureModel({ id: "silent" }) && !isPictureModel({}));
-ok("...and the seven supported picture capabilities say so on the row",
+ok("...and the nine supported picture capabilities say so on the row",
   CATALOG.filter(isPictureModel).map((c) => c.id).join(",")
-    === "coverArt,imageIdeogram,imageZImage,qwen-image-2.1,imageKrea2,imageZImageBase,imageAnima",
+    === "coverArt,imageIdeogram,imageZImage,moss-image,qwen-image-2.1,imageKrea2,imageZImageBase,imageAnima,imageSdxlTurbo",
   CATALOG.filter(isPictureModel).map((c) => c.id).join(", "));
 
 {

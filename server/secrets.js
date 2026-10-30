@@ -25,7 +25,7 @@
  * never sent to the browser, and never leaves this process except in the
  * Authorization header of a request to the provider the user chose.
  *
- * ONLY KEYS TYPED INTO STUDIO. This store is the one place a paid key comes
+ * ONLY EXPLICIT STUDIO CONNECTIONS. This store is the one place a paid key comes
  * from (the owner, 2026-09-24: "input their own api key dont use existing
  * keys"). Nothing in server/, launcher/ or scripts/ reads a key from another
  * program's settings or from an environment variable: the names below such as
@@ -33,6 +33,9 @@
  * FAL_KEY or OPENAI_API_KEY is never looked at. The AIPLAY_ variables near the
  * paid path are the person's own switches and are listed in docs/DEEP_DIVE.md
  * ("Your own key, and only yours").
+ * Optional model downloads can also use the separate Hugging Face OAuth
+ * grant the person approves in their browser. Studio obtains that grant
+ * directly from Hugging Face; it never imports another program's login.
  *
  * ONE STORE PER WINDOWS ACCOUNT, NOT PER COPY. ~/.aiplay-studio is shared by
  * every Studio folder on this account, so a key saved by another copy is still
@@ -80,7 +83,11 @@ const STORE_SHOWN = shownPath(STORE);
  *  and leaves stdin for the data. */
 function ps(script, stdin = "") {
   return new Promise((res, rej) => {
-    const encoded = Buffer.from(script, "utf16le").toString("base64");
+    // PowerShell 7 can pass its module paths to Windows PowerShell 5.1. Load
+    // the security module belonging to this process instead of auto-loading
+    // an incompatible copy, which makes intact DPAPI records look missing.
+    const security = "Import-Module -Name (Join-Path $PSHOME 'Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop; ";
+    const encoded = Buffer.from(security + script, "utf16le").toString("base64");
     const p = spawn("powershell.exe",
       ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
       /* windowsHide: a server the launcher started hidden flashed a console

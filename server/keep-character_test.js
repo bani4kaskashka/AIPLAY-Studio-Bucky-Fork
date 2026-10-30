@@ -142,13 +142,16 @@ test("3: with references and no count named, the reference build's own count run
   const low = plan({ prompt: "<Picture 1> is Mira. Mira runs", refImages: ["a.png"], steps: 4 });
   assert.equal(low.steps, 4, "a count the request named is kept");
   assert.equal(low.notes.find((n) => n.id === "steps-measured")?.text,
-    "Keeping a character was measured on the 8-step reference build at 8 steps; this runs 4 on the 4-step reference build.");
+    "Keeping a character was measured on the 8-step V1.0 reference build at 8 steps; this runs 4 on the 4-step reference build.");
   assert.match(low.character.receipt, /\+ 4 steps \(measured with 8\)$/);
   const text = plan({ steps: 8 });
   assert.equal(text.character.keeps, false);
   assert.equal(text.notes.find((n) => n.id === "steps-measured"), undefined, "no character, nothing measured to fall short of");
-  /* The live config reads the same way (whatever this PC holds). */
-  assert.equal(videoPlan({ prompt: "a", refImages: ["a.png"] }, { engineKey: "h3", eng: H3 }).steps, referenceSteps(H3));
+  /* The live config either runs its reference file's own count or names the
+   * missing speed-up before rendering; a clean checkout has no model files. */
+  const live = videoPlan({ prompt: "a", refImages: ["a.png"] }, { engineKey: "h3", eng: H3 });
+  if (live.refusal) assert.equal(live.refusal.reason, "speedup-missing");
+  else assert.equal(live.steps, referenceSteps(H3));
 });
 
 test("3: the named disks plan the same on NVIDIA's per-path rule and on main's (AMD, Intel, the CPU)", () => {
@@ -157,7 +160,7 @@ test("3: the named disks plan the same on NVIDIA's per-path rule and on main's (
       const p = videoPlan({ prompt: "<Picture 1> is Mira. Mira runs", refImages: ["a.png"] }, { engineKey: "h3", eng: e });
       assert.equal(p.refusal ?? null, null, `${name}, ${rule}: renders`);
       assert.equal(p.steps, steps, `${name}, ${rule}: the reference build's own count`);
-      assert.equal(p.character.receipt, `1 reference picture + ${steps} steps${steps === 8 ? "" : " (measured with 8, not on this PC)"}`, `${name}, ${rule}`);
+      assert.equal(p.character.receipt, `1 reference picture + ${steps} steps${steps === 8 ? "" : " (measured on 8-step V1.0; different build selected)"}`, `${name}, ${rule}`);
     }
   }
 });
@@ -170,18 +173,18 @@ test("3: on a disk with only the 4-step reference file, keeping a character is s
   assert.equal(p.steps, 4, "the disk's own reference count");
   assert.equal(p.character.measuredSteps, 8, "the measured count is the A/B's, not the disk's");
   assert.equal(p.character.measuredHere, false);
-  assert.equal(p.character.receipt, "1 reference picture + 4 steps (measured with 8, not on this PC) + song (lip-sync)");
-  assert.equal(p.character.hint, "Keeping a character was measured on the 8-step reference build, which is not on this PC: "
-    + "this runs the 4-step reference build.");
+  assert.equal(p.character.receipt, "1 reference picture + 4 steps (measured on 8-step V1.0; different build selected) + song (lip-sync)");
+  assert.equal(p.character.hint, "Keeping a character was measured on the 8-step V1.0 reference build; this selects a "
+    + "different build (the 4-step reference build).");
   assert.equal(p.notes.find((n) => n.id === "steps-measured")?.text,
-    "Keeping a character was measured on the 8-step reference build at 8 steps; this runs 4 on the 4-step reference build. "
-    + `That file (${KEEP_MEASURED.file}, in models/loras) is not on this PC, and the Models screen does not fetch it yet.`);
+    "Keeping a character was measured on the 8-step V1.0 reference build at 8 steps; this runs 4 on the 4-step reference build. "
+    + "The selected file differs from the measured V1.0 build.");
   const noSong = plan({ prompt: "<Picture 1> is Mira. Mira runs", refImages: ["a.png"] }, { eng: DISK4 });
-  assert.match(noSong.character.hint, /^If they sing, choose Song under the clip \(lip-sync\) and where the sung line starts\. Keeping a character was measured on the 8-step reference build, which is not on this PC/,
-    "the missing build is said after the first line");
+  assert.match(noSong.character.hint, /^If they sing, choose Song under the clip \(lip-sync\) and where the sung line starts\. Keeping a character was measured on the 8-step V1.0 reference build; this selects a different build/,
+    "the different build is said after the first line");
   /* The Fast chip while keeping: TaoMate is text-only, so the reference build's count, said. */
   assert.deepEqual(keepFast(DISK8), { steps: 4, note: "Fast with a character: 4 steps on the 4-step reference build (the TaoMate "
-    + "3-step build takes no pictures). Keeping a character was measured at 8 steps on the 8-step reference build." });
+    + "3-step build takes no pictures). Keeping a character was measured at 8 steps on the 8-step V1.0 reference build." });
   assert.equal(keepFast(DISK4).steps, 4);
   assert.equal(keepFast(E.ltx ?? {}), null, "no chips, no note");
   assert.match(read("./index.js"), /keepFast: k === "h3" \? keepFast\(e\) : null,/, "/api/status sends it for H3");
@@ -270,7 +273,7 @@ test("3: the receipt and the Keep line, in the server's words", () => {
 test("3: Song under the clip says what it does on each engine; lip-sync only where mouths follow", () => {
   const h3With = plan({ prompt: "<Picture 1> is Mira. Mira sings", refImages: ["a.png"] }).songLine;
   assert.equal(h3With.meta, "lip-sync · optional");
-  assert.match(h3With.hint, /^The mouth follows this stretch of the song \(measured with pictures of the singer\)/);
+  assert.match(h3With.hint, /^Lip-sync was measured with pictures of the singer on the 8-step V1\.0 reference build; other builds are unverified\./);
   const h3Text = plan({ prompt: "a lamp" }).songLine;
   assert.equal(h3Text.meta, "lip-sync with pictures · optional");
   assert.match(h3Text.hint, /from words alone lip-sync is untested\./);
@@ -339,7 +342,7 @@ test("4: a saved character's pictures are staged like the request's own: an uplo
    * "keeps Mira", and the reply blamed the library. */
   const index = read("./index.js");
   const from = index.indexOf("        const stageFrame = async (cover) => {");
-  const to = index.indexOf("        /* ── VIDEO-TO-VIDEO, AND THE MODEL IT NEEDS");
+  const to = index.indexOf("        // Validate options before staging any references;", from);
   const refLine = /\n\s+const stageRef = async \(v\) => \{ try \{ return staged\(v\) \|\| await stageFrame\(v\); \} catch \{ return undefined; \} \};/.exec(index)?.[0];
   assert.ok(from > 0 && to > from && refLine, "stageFrame, staged and stageRef are where the door defines them");
   const create = createDoor();
@@ -421,7 +424,12 @@ test("5: Keep my character sits under the description, shows in Simple, and hold
     'song: $("vidSndRow") && !$("vidSndRow").hidden ? true : undefined']) {
     assert.ok(vidfit.includes(f), f);
   }
-  assert.match(vidfit, /"vidCharacter", "vidSndSong", "vidSndStart", "vidVideoVae"\]\);/, "a change to any of them asks again");
+  const watchSource = /const WATCH = new Set\((\[[\s\S]*?\])\);/.exec(vidfit)?.[1];
+  assert.ok(watchSource, "the actual change-watcher set exists");
+  const watched = JSON.parse(watchSource);
+  for (const id of ["vidCharacter", "vidSndSong", "vidSndStart", "vidVideoVae"])
+    assert.ok(watched.includes(id), `a change to ${id} asks again`);
+  assert.match(vidfit, /if \(!WATCH\.has\(id\)\) return;/, "the actual change handler consults that set");
   assert.ok(vidfit.includes("videoVae: videoVaeChosen(),"), "the check names Engine settings' decoder, so the Runs line is true");
   assert.ok(vidfit.includes("paintSong(r);"), "and paints Song under the clip's words");
   /* web/receipt.js: the steps field reads Keep my character's words first. */

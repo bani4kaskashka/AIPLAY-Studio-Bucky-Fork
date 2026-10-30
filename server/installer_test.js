@@ -4,7 +4,7 @@
  * installer/Setup.cs is built rarely and never for an app change, so the
  * repository has to keep the promises it reads: install.json names folders that
  * exist, and both launchers find the private Node.js it may put in .\node.
- * No network, no build: these read files.
+ * No network: most checks read files; one local C# fixture exercises unpacking.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -22,7 +22,7 @@ const root = (rel) => new URL(`../${rel}`, import.meta.url);
 test("install.json names only things that exist, and everything the app needs to start", () => {
   const m = JSON.parse(src("../install.json"));
   for (const entry of m.include) assert.ok(existsSync(root(entry)), `install.json lists "${entry}", which is not in the repository`);
-  for (const need of ["server", "web", "launcher", "package.json", "package-lock.json", "AIPLAY Studio.exe"])
+  for (const need of ["server", "web", "launcher", "worker", "shared", "package.json", "package-lock.json", "AIPLAY Studio.exe"])
     assert.ok(m.include.includes(need), `an install without "${need}" cannot start`);
   assert.ok(m.exclude.includes("*.md"), "notes and docs stay in the repository");
   assert.ok(m.keep.some((k) => /^LICENSE/.test(k)), "a vendored library's LICENSE.md still ships");
@@ -48,6 +48,7 @@ test("the installer: the original first, a stamped build, checked Node.js, nothi
   assert.match(s, /Directory\.Move\(stage, dir\)/, "one move into place");
   assert.match(s, /That folder is a git clone/, "never replaces a developer's clone");
   assert.doesNotMatch(s, /pip install|winget|msiexec|runas/i, "no machine-wide installs, no admin prompt, nothing for the engine");
+  assert.doesNotMatch(s, /chkDelete|Delete this installer|ping 127\.0\.0\.1 -n 3/, "closing, cancelling or failing never schedules installer deletion");
   assert.match(src("../.gitignore"), /^\/node\/$/m, "a private Node.js in a clone is never committed");
 });
 
@@ -63,10 +64,8 @@ test("the release rules ship in a tracked file, since CLAUDE.md is git-ignored h
   assert.match(src("../scripts/stamp-lineage.mjs"), /const FORKS = \[/);
 });
 
-/* ── S1 / H1: the first thing a newcomer clicks is the installer ─────────────
- * The asset URL was read from the live release on 2026-09-24 (`gh api
- * repos/Senzube4n/AIPLAY-Studio/releases/latest`: tag setup-v1.2, asset
- * AIPLAY.Studio.Setup.exe, 327,168 bytes) and follows it with a 302. */
+/* S1 / H1: the original's download button stays on its own installer channel.
+ * The asset retains GitHub's normalised name, AIPLAY.Studio.Setup.exe. */
 const SETUP_URL = "https://github.com/Senzube4n/AIPLAY-Studio/releases/latest/download/AIPLAY.Studio.Setup.exe";
 const ZIP_URL = "https://github.com/Senzube4n/AIPLAY-Studio/archive/refs/heads/main.zip";
 
@@ -78,8 +77,10 @@ test("the README's first Download button is Setup.exe, and the zip is Source cod
   assert.doesNotMatch(first[1], /archive\//, "not the source zip, which needs Node.js installed by hand");
   assert.ok(readme.indexOf(first[0]) < readme.indexOf(ZIP_URL), "the zip comes after the button");
   assert.ok(readme.includes(`<a href="${ZIP_URL}">Source code (for developers)</a>`), "the zip is labelled for developers");
-  assert.ok(readme.includes("Windows may say “Windows protected your PC” because the installer is not signed yet: "
-    + "click <b>More info</b>, then <b>Run anyway</b>."), "one plain line about SmartScreen, under the button");
+  assert.ok(readme.includes("The installer is currently unsigned."), "the download section states the current signing status");
+  assert.ok(readme.includes('keep it quarantined and use the <a href="INSTALL.md#if-antivirus-blocks-the-installer">source-install alternative</a>; do not disable protection.'),
+    "a blocked installer leads to the documented source alternative");
+  assert.doesNotMatch(readme, /click <b>More info<\/b>, then <b>Run anyway<\/b>/, "the download section does not instruct bypassing a security warning");
   const quick = readme.slice(readme.indexOf("## YuE2 music-only quickstart"));
   assert.ok(quick.indexOf(SETUP_URL) > 0 && quick.indexOf(SETUP_URL) < quick.indexOf(ZIP_URL), "the quickstart's step 1 is Setup.exe too");
   /* The name GitHub serves: RELEASING.md's upload keeps the file name, and says why. */
@@ -288,27 +289,184 @@ test("canonical origin removes inherited Bucky identity, while a selected fork o
   const chosen = {};
   assert.match(reconcileLineage(chosen, "git@github.com:bani4kaskashka/AIPLAY-Studio-Bucky-Fork.git"), /restored B/);
   assert.equal(chosen.aiplay.lineage.repo, "bani4kaskashka/AIPLAY-Studio-Bucky-Fork");
+  const nemesis = {};
+  assert.match(reconcileLineage(nemesis, "https://github.com/nemesisone-dev/AIPLAY-Studio.git"), /restored N/);
+  assert.equal(nemesis.aiplay.lineage.repo, "nemesisone-dev/AIPLAY-Studio");
   const saved = structuredClone(chosen);
   reconcileLineage(chosen, "");
   assert.deepEqual(chosen, saved, "a ZIP has no origin; do not rewrite the fork chosen at install time");
   assert.equal(reconcileLineage({}, "https://example.test/Senzube4n/AIPLAY-Studio.git"), "", "match GitHub repository identity, not a substring");
 });
 
-test("the compiled installer refuses a Git worktree and restores the old app when preserving files fails", async (t) => {
+test("the compiled installer keeps isolated stages, uses locked npm, refuses a Git worktree and restores preserved files", async (t) => {
   const fw = path.join(process.env.WINDIR || "C:\\Windows", "Microsoft.NET", "Framework64", "v4.0.30319");
   const compiler = path.join(fw, "csc.exe");
   if (process.platform !== "win32" || !existsSync(compiler)) return t.skip("requires the Windows .NET Framework compiler");
   const base = await mkdtemp(path.join(tmpdir(), "aiplay-installer-fixture-"));
   try {
     const harness = path.join(base, "Fixture.cs"), exe = path.join(base, "Fixture.exe");
-    await writeFile(harness, `using System; using System.IO; using System.Reflection;
+    await writeFile(harness, `using System; using System.IO; using System.IO.Compression; using System.Reflection;
 static class Fixture {
+  static void Entry(ZipArchive zip, string name, string content) {
+    using (var writer = new StreamWriter(zip.CreateEntry("repo/" + name).Open())) writer.Write(content);
+  }
+  static void CheckBootstrap(string root, Source chosen) {
+    // Inspect the compiled close path without constructing a window, which
+    // would start the repository check. Cancel, failure and success all use it.
+    var declared = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+    if (typeof(SetupForm).GetMethod("OnFormClosed", declared) != null
+      || typeof(SetupForm).GetField("chkDelete", declared) != null)
+      throw new Exception("Closing Setup must not have a self-delete handler or option");
+
+    // Stop each real Run at its first progress event, before any network. The
+    // inner attempt must have its own stage and clean only that stage on failure.
+    string parent = Path.Combine(root, "parallel stages"), outerWork = null;
+    Directory.CreateDirectory(parent);
+    var outer = new Installer(chosen, Path.Combine(parent, "outer app"), false, false, false);
+    outer.Step += (n, total, text) => {
+      var initial = Directory.GetDirectories(parent, "~aiplay*");
+      if (initial.Length != 1) throw new Exception("Expected one isolated outer stage");
+      outerWork = initial[0];
+      File.WriteAllText(Path.Combine(outerWork, "owned.txt"), "outer attempt");
+      var inner = new Installer(chosen, Path.Combine(parent, "inner app"), false, false, false);
+      inner.Step += (ni, ti, si) => {
+        var concurrent = Directory.GetDirectories(parent, "~aiplay*");
+        if (concurrent.Length != 2) throw new Exception("Concurrent attempts must not share a stage");
+        foreach (var folder in concurrent) {
+          Guid id;
+          if (!Guid.TryParseExact(Path.GetFileName(folder).Substring("~aiplay".Length), "N", out id)
+            || !Directory.Exists(Path.Combine(folder, "a")))
+            throw new Exception("Each attempt needs a complete GUID-named stage");
+        }
+        throw new InstallException("fixture stop before network");
+      };
+      try { inner.Run(); throw new Exception("Inner fixture did not stop"); }
+      catch (InstallException e) { if (e.Message != "fixture stop before network") throw; }
+      if (Directory.GetDirectories(parent, "~aiplay*").Length != 1
+        || File.ReadAllText(Path.Combine(outerWork, "owned.txt")) != "outer attempt")
+        throw new Exception("Inner cleanup must preserve the outer attempt");
+      throw new InstallException("fixture stop before network");
+    };
+    try { outer.Run(); throw new Exception("Outer fixture did not stop"); }
+    catch (InstallException e) { if (e.Message != "fixture stop before network") throw; }
+    if (outerWork == null || Directory.GetDirectories(parent, "~aiplay*").Length != 0)
+      throw new Exception("Failed attempts must clean their own stages");
+
+    // Run the real npm process boundary against a local stand-in. No npm
+    // packages, lifecycle scripts or network are executed by this fixture.
+    string nodeDir = Path.Combine(root, "node tools"), npmStage = Path.Combine(root, "npm stage");
+    Directory.CreateDirectory(nodeDir);
+    Directory.CreateDirectory(npmStage);
+    File.WriteAllText(Path.Combine(nodeDir, "npm.cmd"), "@echo off\\r\\n>npm-args.txt echo %*\\r\\n>npm-cwd.txt echo %CD%\\r\\nmkdir node_modules\\\\ws\\r\\nmkdir node_modules\\\\three\\r\\nmkdir node_modules\\\\gltf-validator\\r\\nexit /b 0\\r\\n");
+    bool fetched = (bool)typeof(Installer).GetMethod("Npm", BindingFlags.Instance | BindingFlags.NonPublic)
+      .Invoke(outer, new object[] { Path.Combine(nodeDir, "node.exe"), npmStage });
+    if (!fetched || File.ReadAllText(Path.Combine(npmStage, "npm-args.txt")).Trim()
+      != "ci --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error"
+      || File.ReadAllText(Path.Combine(npmStage, "npm-cwd.txt")).Trim() != npmStage)
+      throw new Exception("npm must use the stage lockfile and suppress lifecycle scripts");
+    File.WriteAllText(Path.Combine(nodeDir, "npm.cmd"), "@echo off\\r\\nexit /b 23\\r\\n");
+    bool failedNpmAccepted = (bool)typeof(Installer).GetMethod("Npm", BindingFlags.Instance | BindingFlags.NonPublic)
+      .Invoke(outer, new object[] { Path.Combine(nodeDir, "node.exe"), npmStage });
+    if (failedNpmAccepted) throw new Exception("Stale package folders must not hide a failed npm ci");
+    Console.WriteLine("no self-delete close handler; concurrent GUID stages isolated and cleaned; locked npm ci without scripts; failed npm refused despite stale folders");
+  }
   static int Main(string[] args) {
+    var chosen = Sources.Original;
+    if (chosen != Sources.All[0] || chosen.Key != "senzu" || chosen.Repo != "Senzube4n/AIPLAY-Studio" || chosen.Letter != "S")
+      throw new Exception("The original must be first and selected by default");
+    if (Options.Parse(new string[0]).Repo != "senzu") throw new Exception("The original must be the command-line default");
+    foreach (var key in new[] { "senzu", "bucky" })
+      foreach (var prefix in new[] { "/repo:", "--repo=" }) {
+        var selected = Sources.ByKey(Options.Parse(new[] { prefix + key }).Repo);
+        if (selected == null || selected.Key != key) throw new Exception("Both known builds must remain selectable");
+      }
+    if (Sources.ByKey("unknown") != null) throw new Exception("An unknown source must not select a build");
     string root = args[0], app = Path.Combine(root, "app"), stage = Path.Combine(root, "stage");
+    CheckBootstrap(root, chosen);
+    string archive = Path.Combine(root, "manifest.zip"), unpack = Path.Combine(root, "unpack");
+    var manifest = Net.Json(File.ReadAllText(args[1]));
+    Console.WriteLine("manifest array runtime type: " + manifest["include"].GetType().FullName);
+    using (var zip = ZipFile.Open(archive, ZipArchiveMode.Create)) {
+      Entry(zip, "install.json", File.ReadAllText(args[1]));
+      foreach (string required in (System.Collections.IList)manifest["required"])
+        if (required != "install.json" && required != "launcher/launcher.mjs" && required != "shared/model-bundles.js"
+          && required != "worker/runpod-worker.js") Entry(zip, required, "fixture payload");
+      Entry(zip, "launcher/launcher.mjs", "launcher");
+      Entry(zip, "worker/runpod-worker.js", "worker");
+      Entry(zip, "shared/model-bundles.js", "shared models");
+      Entry(zip, "scripts/helper.mjs", "helper");
+      Entry(zip, "scripts/skipped_test.ps1", "test-only");
+      Entry(zip, "worker/readme.md", "excluded notes");
+      Entry(zip, "worker/vendor/LICENSE.md", "required licence");
+    }
+    Directory.CreateDirectory(unpack);
+    var unpacker = new Installer(chosen, Path.Combine(root, "manifest-app"), false, false, false);
+    typeof(Installer).GetMethod("Unpack", BindingFlags.Instance | BindingFlags.NonPublic)
+      .Invoke(unpacker, new object[] { archive, unpack });
+    var preserved = (string[])typeof(Installer).GetField("preserve", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(unpacker);
+    Console.Error.WriteLine("manifest " + manifest["include"].GetType().FullName
+      + "; worker=" + File.Exists(Path.Combine(unpack, "worker", "runpod-worker.js"))
+      + "; shared=" + File.Exists(Path.Combine(unpack, "shared", "model-bundles.js"))
+      + "; test=" + File.Exists(Path.Combine(unpack, "scripts", "skipped_test.ps1"))
+      + "; notes=" + File.Exists(Path.Combine(unpack, "worker", "readme.md"))
+      + "; licence=" + File.Exists(Path.Combine(unpack, "worker", "vendor", "LICENSE.md"))
+      + "; extraPreserve=" + (Array.IndexOf(preserved, "vendor/previz-blender") >= 0));
+    if (!File.Exists(Path.Combine(unpack, "worker", "runpod-worker.js"))
+      || !File.Exists(Path.Combine(unpack, "shared", "model-bundles.js"))
+      || !File.Exists(Path.Combine(unpack, "scripts", "helper.mjs"))
+      || !File.Exists(Path.Combine(unpack, "worker", "vendor", "LICENSE.md"))
+      || File.Exists(Path.Combine(unpack, "scripts", "skipped_test.ps1"))
+      || File.Exists(Path.Combine(unpack, "worker", "readme.md")))
+      throw new Exception("Real install.json arrays must include worker/shared, exclude tests and notes, and keep licences");
+    if (Array.IndexOf(preserved, "vendor/previz-blender") < 0)
+      throw new Exception("Manifest preservation paths must survive JSON deserialization");
+    // Real extraction must reject malformed manifests and required files that
+    // were omitted, instead of silently reverting to an outdated include list.
+    int rejected = 0;
+    foreach (string bad in new[] {
+      "{\\\"include\\\":false}",
+      "{\\\"include\\\":[\\\"launcher\\\",42]}",
+      "{\\\"include\\\":[\\\"launcher\\\"],\\\"required\\\":[\\\"shared/model-profiles.js\\\"]}",
+      "{\\\"include\\\":[\\\"launcher\\\"],\\\"required\\\":[\\\"../outside.js\\\"]}",
+      "{\\\"include\\\":[\\\"../server\\\"]}"
+    }) {
+      string invalidZip = Path.Combine(root, "invalid-" + rejected + ".zip");
+      using (var zip = ZipFile.Open(invalidZip, ZipArchiveMode.Create)) {
+        Entry(zip, "install.json", bad);
+        Entry(zip, "launcher/launcher.mjs", "export {};");
+      }
+      bool invalid = false;
+      try { typeof(Installer).GetMethod("Unpack", BindingFlags.Instance | BindingFlags.NonPublic)
+        .Invoke(unpacker, new object[] { invalidZip, Path.Combine(root, "invalid-stage-" + rejected) }); }
+      catch (TargetInvocationException e) { invalid = e.InnerException is InstallException; }
+      if (!invalid) throw new Exception("An invalid/incomplete manifest must stop extraction");
+      rejected++;
+    }
+    // Exercise the actual installer -> Node validator boundary, without booting
+    // Studio, npm, an engine or the installer's network entry point.
+    string checkedStage = Path.Combine(root, "checked stage");
+    Directory.CreateDirectory(Path.Combine(checkedStage, "scripts"));
+    Directory.CreateDirectory(Path.Combine(checkedStage, "server"));
+    Directory.CreateDirectory(Path.Combine(checkedStage, "launcher"));
+    File.Copy(args[3], Path.Combine(checkedStage, "scripts", "verify-install.mjs"));
+    File.Copy(Path.Combine(Path.GetDirectoryName(args[3]), "install-manifest.mjs"), Path.Combine(checkedStage, "scripts", "install-manifest.mjs"));
+    File.WriteAllText(Path.Combine(checkedStage, "install.json"), "{\\\"include\\\":[\\\"server\\\",\\\"launcher\\\",\\\"shared\\\"]}");
+    File.WriteAllText(Path.Combine(checkedStage, "package.json"), "{\\\"type\\\":\\\"module\\\"}");
+    File.WriteAllText(Path.Combine(checkedStage, "launcher", "launcher.mjs"), "export {};");
+    File.WriteAllText(Path.Combine(checkedStage, "server", "index.js"), "import '../shared/model-profiles.js'; throw new Error('must never execute');");
+    var validator = typeof(Installer).GetMethod("ValidatePayload", BindingFlags.Instance | BindingFlags.NonPublic);
+    bool missingStopped = false;
+    try { validator.Invoke(unpacker, new object[] { args[2], checkedStage }); }
+    catch (TargetInvocationException e) { missingStopped = e.InnerException is InstallException && e.InnerException.Message.Contains("model-profiles.js"); }
+    if (!missingStopped) throw new Exception("Missing imported shared module must prevent finishing the install");
+    Directory.CreateDirectory(Path.Combine(checkedStage, "shared"));
+    File.WriteAllText(Path.Combine(checkedStage, "shared", "model-profiles.js"), "export {};");
+    validator.Invoke(unpacker, new object[] { args[2], checkedStage });
+    Console.WriteLine("malformed manifests refused; missing startup import refused; valid modules parsed without execution");
     Directory.CreateDirectory(Path.Combine(app, "launcher"));
     File.WriteAllText(Path.Combine(app, "launcher", "launcher.mjs"), "old app");
     File.WriteAllText(Path.Combine(app, ".git"), "gitdir: elsewhere");
-    var installer = new Installer(new Source("senzu", "Senzu", "S", "Senzube4n/AIPLAY-Studio"), app, false, false, false);
+    var installer = new Installer(chosen, app, false, false, false);
     bool refused = false;
     try { installer.Run(); } catch (InstallException e) { refused = e.Message.Contains("git clone"); }
     if (!refused) throw new Exception("A worktree must be refused before any network or install work");
@@ -323,14 +481,18 @@ static class Fixture {
     if (!failed || File.ReadAllText(Path.Combine(app, "launcher", "launcher.mjs")) != "old app"
       || File.ReadAllText(Path.Combine(app, "workflows", "custom", "mine.json")) != "my workflow")
       throw new Exception("A failed preservation copy must restore the whole old install");
-    Console.WriteLine("worktree refused; failed preservation restored old install"); return 0;
+    Console.WriteLine("original first; both builds selectable; manifest honoured; worktree refused; failed preservation restored old install"); return 0;
   }
 }`);
     execFileSync(compiler, ["/nologo", "/target:exe", "/main:Fixture", `/out:${exe}`,
       "/r:System.dll", "/r:System.Core.dll", "/r:System.Drawing.dll", "/r:System.Windows.Forms.dll",
       ...["System.IO.Compression.dll", "System.IO.Compression.FileSystem.dll", "System.Web.Extensions.dll"].map(d => `/r:${path.join(fw, d)}`),
       fileURLToPath(root("installer/Setup.cs")), harness], { windowsHide: true, stdio: "pipe" });
-    const output = execFileSync(exe, [base], { windowsHide: true, encoding: "utf8" });
+    const output = execFileSync(exe, [base, fileURLToPath(root('install.json')), process.execPath,
+      fileURLToPath(root('scripts/verify-install.mjs'))], { windowsHide: true, encoding: "utf8" });
+    assert.match(output, /original first; both builds selectable; manifest honoured/);
     assert.match(output, /worktree refused; failed preservation restored old install/);
+    assert.match(output, /malformed manifests refused; missing startup import refused; valid modules parsed without execution/);
+    assert.match(output, /no self-delete close handler; concurrent GUID stages isolated and cleaned; locked npm ci without scripts; failed npm refused despite stale folders/);
   } finally { await rm(base, { recursive: true, force: true }); }
 });

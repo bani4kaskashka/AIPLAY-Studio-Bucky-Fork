@@ -23,7 +23,7 @@ const post = async (body) => {
 const getJson = async (url) => {
   const r = await fetch(url);
   const d = await r.json().catch(() => ({}));
-  if (!r.ok || d.error) throw new Error(d.error || `Studio answered ${r.status}.`);
+  if (!r.ok || d.error) throw Object.assign(new Error(d.error || `Studio answered ${r.status}.`), { status: r.status });
   return d;
 };
 
@@ -31,6 +31,12 @@ let wired = false;
 let current = null;            // the open page: { id, name, version, versions, html }
 let busy = false;
 let pageErrors = [];           // what the running version has reported, sent with the next request
+let selection = 0;             // newer navigation wins over an older response
+let listing = 0;
+let opening = 0;
+let activeBuild = null;
+const deleting = new Set();
+const selected = (target) => current?.id === target.id && selection === target.selection && !deleting.has(target.id);
 
 /* ── the frame ──────────────────────────────────────────────────────────── */
 
@@ -100,7 +106,11 @@ async function bridgeAnswer(op, args = {}) {
  * shellHtml: the page's parent), which is Studio's own origin, so the
  * listener is added there each time a wrapper loads. Only the page inside
  * the wrapper is answered. */
-const pageWindow = () => { try { return $("mpFrame").contentDocument?.getElementById("f")?.contentWindow || null; } catch { return null; } };
+const pageWindow = () => { try {
+  const frame = $("mpFrame");
+  if (frame.contentWindow?.location.href !== frame.src) return null;
+  return frame.contentDocument?.getElementById("f")?.contentWindow || null;
+} catch { return null; } };
 async function onBridgeMessage(e) {
   const inner = pageWindow();
   if (!inner || e.source !== inner) return;
@@ -125,23 +135,34 @@ async function onBridgeMessage(e) {
 
 const say = (text, warn = false) => { $("mpNote").textContent = text; $("mpNote").classList.toggle("warnhint", warn); };
 
-async function refresh(openId = current?.id) {
+async function refresh(openId = current?.id, expected = selection, reopen = true) {
+  const request = ++listing;
   let d;
   try { d = await getJson("/api/pages"); }
-  catch (err) { $("mpPages").innerHTML = `<li class="hint">${esc(err.message)}</li>`; return; }
-  $("mpPages").innerHTML = d.pages.map((p) => `<li><button type="button" class="mp-item${p.id === openId ? " on" : ""}" data-mp="${esc(p.id)}"
-      aria-current="${p.id === openId ? "true" : "false"}"><b>${esc(p.name)}</b><span>${p.versions} version${p.versions === 1 ? "" : "s"}</span></button></li>`).join("");
+  catch (err) { if (request === listing) $("mpPages").innerHTML = `<li class="hint">${esc(err.message)}</li>`; return null; }
+  if (request !== listing) return null;
+  const shownId = expected === selection && reopen ? openId : current?.id;
+  $("mpPages").innerHTML = d.pages.map((p) => `<li><button type="button" class="mp-item${p.id === shownId ? " on" : ""}" data-mp="${esc(p.id)}"
+      aria-current="${p.id === shownId ? "true" : "false"}"><b>${esc(p.name)}</b><span>${p.versions} version${p.versions === 1 ? "" : "s"}</span></button></li>`).join("");
   $("mpEmpty").hidden = d.pages.length > 0;
   engineOff = !!d.engineOff;
   paintModels(d.models);
-  if (openId && d.pages.some((p) => p.id === openId)) await open(openId, null, false);
-  else if (!openId && d.pages[0]) await open(d.pages[0].id);
-  else if (!d.pages.length) { current = null; $("mpMain").hidden = true; setFull(false); }
+  if (!reopen || expected !== selection) return null;
+  if (openId && d.pages.some((p) => p.id === openId)) return open(openId, null, false, expected);
+  if (d.pages[0]) return open(d.pages[0].id, null, true, expected);
+  current = null; selection++; pageErrors = []; paintErrors();
+  $("mpMain").hidden = true; setFull(false);
+  return null;
 }
 
-async function open(id, v = null, list = true) {
-  try { current = await getJson(`/api/pages/${encodeURIComponent(id)}${v ? `?v=${v}` : ""}`); }
-  catch (err) { say(err.message, true); return; }
+async function open(id, v = null, list = true, expected = selection) {
+  if (expected !== selection || deleting.has(id)) return null;
+  const request = ++opening, view = list ? ++selection : selection;
+  let page;
+  try { page = await getJson(`/api/pages/${encodeURIComponent(id)}${v ? `?v=${v}` : ""}`); }
+  catch (err) { if (request === opening && view === selection) say(err.message, true); return null; }
+  if (request !== opening || view !== selection || deleting.has(id)) return null;
+  current = page;
   $("mpMain").hidden = false;
   $("mpName").value = current.name;
   $("mpVersion").innerHTML = current.versions.slice().reverse().map((x) =>
@@ -149,12 +170,15 @@ async function open(id, v = null, list = true) {
   $("mpVersion").value = String(current.version);
   $("mpCode").value = current.html;
   showFrame();
+  say("");
+  $("mpLive").hidden = true; $("mpTimer").hidden = true;
   paintGo();
   if (list) for (const b of document.querySelectorAll("#mpPages [data-mp]")) {
     const on = b.dataset.mp === id;
     b.classList.toggle("on", on);
     b.setAttribute("aria-current", on ? "true" : "false");
   }
+  return view;
 }
 
 /* ── the model menu ─────────────────────────────────────────────────────── */
@@ -296,23 +320,23 @@ async function submitModelDialog() {
 
 /* Folded = only the pencil shows. While the model writes the box folds by
  * itself; the pencil opens it to show what was asked, greyed and read only. */
-function setMini(on) {
+function setMini(on, focus = true) {
   const stage = $("mpStage");
   stage.classList.toggle("mp-mini", on);
   $("mpPencil").hidden = !on;
   $("mpPencil").setAttribute("aria-expanded", on ? "false" : "true");
   $("mpTimer").hidden = !(on && busy);
-  if (!on && !busy) $("mpAsk").focus();
+  if (!on && !busy && focus) $("mpAsk").focus();
 }
 
-function setBusy(on) {
+function setBusy(on, focus = true) {
   busy = on;
   $("mpStage").classList.toggle("mp-busy", on);
   $("mpAsk").readOnly = on;
   $("mpModel").disabled = on;
   $("mpPencilSay").textContent = on ? "The model is writing the page. Show what you asked." : "Show the request box";
   $("mpPencil").title = on ? "Writing… click to see what you asked" : "Show the request box";
-  if (on) setMini(true); else { $("mpTimer").hidden = true; $("mpLive").hidden = true; setMini(false); }
+  if (on) setMini(true); else { $("mpTimer").hidden = true; $("mpLive").hidden = true; setMini(false, focus); }
   paintGo();
 }
 
@@ -329,6 +353,7 @@ function paintLive() {
   live.queued = true;
   requestAnimationFrame(() => {
     live.queued = false;
+    if (!activeBuild || !selected(activeBuild)) { $("mpLive").hidden = true; return; }
     const show = (id, text) => { const el = $(id); el.hidden = !text; el.textContent = text.slice(-1500); el.scrollTop = el.scrollHeight; };
     show("mpThink", live.think);
     show("mpWrite", live.write);
@@ -340,11 +365,12 @@ function paintLive() {
   });
 }
 
-async function generate(request, errors) {
+async function generate(target, request, errors) {
   const started = Date.now();
   Object.assign(live, { think: "", write: "", note: "" });
   paintLive();
   const clock = () => {
+    if (!selected(target)) return;
     const s = Math.round((Date.now() - started) / 1000);
     const doing = live.write ? `Writing the page · ${(live.write.length / 1000).toFixed(1)}k characters` : live.think ? "Thinking" : "Waiting for the model";
     say(`${doing}… ${s} s`);
@@ -354,7 +380,7 @@ async function generate(request, errors) {
   const tick = setInterval(clock, 1000);
   try {
     const r = await fetch("/api/pages", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "generate", stream: true, id: current.id, model: $("mpModel").value, request, errors }) });
+      body: JSON.stringify({ action: "generate", stream: true, id: target.id, model: target.model, request, errors }) });
     if (!r.ok || !r.body) {
       const d = await r.json().catch(() => ({}));
       throw new Error(d.error || `Studio answered ${r.status}.`);
@@ -385,21 +411,32 @@ async function generate(request, errors) {
 }
 
 async function build() {
-  if (!current || busy) return;
+  if (!current || busy || deleting.has(current.id)) return;
+  const target = { id: current.id, selection, model: $("mpModel").value };
+  const request = $("mpAsk").value, errors = pageErrors.slice();
+  activeBuild = target;
   setBusy(true);
   let built = false;
   try {
-    const r = await generate($("mpAsk").value, pageErrors.slice());
+    const r = await generate(target, request, errors);
     built = true;
-    await refresh(current.id);
+    if (!selected(target)) return;
+    const opened = await refresh(target.id, target.selection);
+    if (!opened || current?.id !== target.id || current.version !== r.version) return;
+    target.selection = opened;
     /* ONE automatic repair: a new version that throws while it starts is sent
      * straight back with its errors, rather than leaving the person to ask. */
     await waitMs(3000);
+    if (!selected(target) || current.version !== r.version) return;
     if (pageErrors.length) {
       say(`v${r.version} hit an error while starting. Asking the model to fix it (once)…`, true);
-      const fix = await generate("The page you just wrote throws the errors listed above when it starts. Fix them, change nothing else.", pageErrors.slice());
-      await refresh(current.id);
+      const fix = await generate(target, "The page you just wrote throws the errors listed above when it starts. Fix them, change nothing else.", pageErrors.slice());
+      if (!selected(target)) return;
+      const repaired = await refresh(target.id, target.selection);
+      if (!repaired || current?.id !== target.id || current.version !== fix.version) return;
+      target.selection = repaired;
       await waitMs(3000);
+      if (!selected(target) || current.version !== fix.version) return;
       say(pageErrors.length
         ? `Fixed once as v${fix.version}, but it still reports an error. Describe what you see, or pick an older version.`
         : `Built and repaired: v${fix.version}. The version list goes back.`, pageErrors.length > 0);
@@ -407,11 +444,19 @@ async function build() {
       say(`Done in ${r.seconds} s. Saved as v${r.version}; the version list goes back.`);
     }
   } catch (err) {
-    say(err.message, true);
+    if (selected(target)) {
+      let missing = false;
+      try { await getJson(`/api/pages/${encodeURIComponent(target.id)}`); }
+      catch (check) { missing = check.status === 404; }
+      if (missing) await refresh(target.id, target.selection);
+      else if (selected(target)) say(err.message, true);
+    }
   } finally {
     /* A failed request stays in the box to try again; a built one is cleared. */
-    if (built) $("mpAsk").value = "";
-    setBusy(false);
+    const stillHere = selected(target);
+    if (built && stillHere) $("mpAsk").value = "";
+    activeBuild = null;
+    setBusy(false, stillHere);
   }
 }
 
@@ -471,25 +516,37 @@ async function importFile(file) {
   catch { await appAlert("That file is not an AIPLAY page file."); return; }
   const who = parsed?.author ? ` by ${parsed.author}` : "";
   const ok = await appConfirm(`Import “${String(parsed?.name || "a page").slice(0, 60)}”${who}? `
-    + "It runs in a sealed box: it can see your song and picture list, nothing else, and has no internet.",
+    + "It can read your song and picture libraries and keep its own saved data. It runs without internet access.",
   { title: "Import a page", ok: "Import" });
   if (!ok) return;
-  try { const meta = await post({ action: "import", file: parsed }); await refresh(meta.id); say("Imported."); }
+  const expected = ++selection;
+  try { const meta = await post({ action: "import", file: parsed }); if (await refresh(meta.id, expected)) say("Imported."); }
   catch (err) { await appAlert(err.message); }
 }
 
 /* ── wiring ─────────────────────────────────────────────────────────────── */
 
 async function newPage() {
-  try { const meta = await post({ action: "create", name: "My page" }); await refresh(meta.id); if (!busy) setMini(false); }
-  catch (err) { say(err.message, true); }
+  const expected = ++selection;
+  try { const meta = await post({ action: "create", name: "My page" }); if (await refresh(meta.id, expected) && !busy) setMini(false); }
+  catch (err) { if (expected === selection) say(err.message, true); }
 }
 async function deletePage() {
   if (!current) return;
-  if (!(await appConfirm(`Delete “${current.name}” and all its versions? Export it first if you want a copy.`,
+  const target = { id: current.id, selection }, name = current.name;
+  if (deleting.has(target.id)) return;
+  if (!(await appConfirm(`Delete “${name}” and all its versions? Export it first if you want a copy.`,
     { title: "Delete page", ok: "Delete", tone: "danger" }))) return;
-  try { await post({ action: "delete", id: current.id }); current = null; setFull(false); await refresh(null); say(""); }
-  catch (err) { say(err.message, true); }
+  if (deleting.has(target.id)) return;
+  deleting.add(target.id);
+  try {
+    await post({ action: "delete", id: target.id });
+    if (current?.id === target.id && selection === target.selection) {
+      current = null; selection++; setFull(false);
+      await refresh(null); say("");
+    } else await refresh(current?.id, selection, false);
+  } catch (err) { if (current?.id === target.id && selection === target.selection) say(err.message, true); }
+  finally { deleting.delete(target.id); }
 }
 const reload = () => current && showFrame();
 
@@ -504,8 +561,9 @@ function wire() {
   $("mpVersion").onchange = () => current && open(current.id, $("mpVersion").value);
   $("mpName").onchange = async () => {
     if (!current) return;
-    try { const r = await post({ action: "rename", id: current.id, name: $("mpName").value }); current.name = r.name; refresh(current.id); }
-    catch (err) { say(err.message, true); }
+    const target = { id: current.id, selection }, name = $("mpName").value;
+    try { const r = await post({ action: "rename", id: target.id, name }); if (selected(target)) { current.name = r.name; await refresh(target.id, target.selection); } }
+    catch (err) { if (selected(target)) say(err.message, true); }
   };
   $("mpAsk").addEventListener("input", paintGo);
   $("mpAsk").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (!$("mpGo").disabled) build(); } });
@@ -532,8 +590,9 @@ function wire() {
   $("mpReload").onclick = reload;
   $("mpSaveCode").onclick = async () => {
     if (!current) return;
-    try { const r = await post({ action: "save", id: current.id, html: $("mpCode").value }); say(`Saved as v${r.version}.`); await refresh(current.id); }
-    catch (err) { say(err.message, true); }
+    const target = { id: current.id, selection }, html = $("mpCode").value;
+    try { const r = await post({ action: "save", id: target.id, html }); if (selected(target)) { const opened = await refresh(target.id, target.selection); if (opened && current?.id === target.id) say(`Saved as v${r.version}.`); } }
+    catch (err) { if (selected(target)) say(err.message, true); }
   };
   $("mpDelete").onclick = deletePage;
   $("mpExport").onclick = exportPage;
@@ -589,9 +648,10 @@ document.addEventListener("click", (e) => {
 
 async function startIdea(text) {
   if (busy) { say("A page is being built. Try the idea again when it is done.", true); return; }
+  const expected = ++selection;
   try {
     const meta = await post({ action: "create", name: "My page" });
-    await refresh(meta.id);
+    if (!await refresh(meta.id, expected)) return;
     if (!busy) setMini(false);
     const box = $("mpAsk");
     box.value = text;
@@ -599,5 +659,5 @@ async function startIdea(text) {
     box.focus();
     box.setSelectionRange(text.length, text.length);
     say("An idea from Chat. Change anything you like, then press Build.");
-  } catch (err) { say(err.message, true); }
+  } catch (err) { if (expected === selection) say(err.message, true); }
 }

@@ -80,6 +80,17 @@ in the app.
                             Kingdom, Republic of Korea, United States of
                             America.
 
+    full-width H3 video-to-video control (6.81 GB)
+                            MiniMax H3 Community Licence (a patch on H3's weights)
+                            Output rights: yours, with conditions (MiniMax H3
+                            Community License Agreement §VI.4 (Intellectual
+                            Property); this patch is a derivative of H3)
+                            https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE
+                            ⚠ Grants rights only inside its Applicable
+                            Territory, which EXCLUDES European Union, United
+                            Kingdom, Republic of Korea, United States of
+                            America.
+
     Fast setting for H3 (TaoMate 3-step, 182 MB)
                             MiniMax H3 Community Licence (derived from H3)
                             Output rights: yours, with conditions (MiniMax H3
@@ -289,6 +300,51 @@ in the app.
                             Copyright License))
                             https://github.com/Tongyi-MAI/Z-Image/blob/main/LICENSE
 
+    MOSS-Image SFT (experimental)
+                            Apache-2.0
+                            Output rights: yours (Apache-2.0 §2 (Grant of
+                            Copyright License))
+                            https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT/blob/main/LICENSE
+
+    Kromoss INT8 (experimental)
+                            Apache-2.0
+                            Output rights: yours (Apache-2.0 §2 (Grant of
+                            Copyright License))
+                            https://huggingface.co/lodestones/Kromoss/blob/7f9bb7b06d7b6c27d294b0bab5a2b3056c379279/LICENSE
+
+    MOSS-Image Turbo 4 (experimental)
+                            Apache-2.0
+                            Output rights: yours (Apache-2.0 §2 (Grant of
+                            Copyright License); adapter model card declares
+                            Apache-2.0)
+                            https://huggingface.co/akhaliq/MOSS-Image-SFT-4-steps/blob/2ded95c37a029360245926fe72e475e30039bbfb/README.md
+
+    MOSS-Image DMD 8 (experimental)
+                            Apache-2.0
+                            Output rights: yours (Apache-2.0 §2 (Grant of
+                            Copyright License); adapter model card declares
+                            Apache-2.0)
+                            https://huggingface.co/lodestones/MOSS-Image-SFT-8-steps-dmd/blob/f95df83b5e90ae91ea412434b3f9b7f1c8c6314f/README.md
+
+    Kromoss DMD2 8 (experimental)
+                            Apache-2.0
+                            Output rights: yours (Apache-2.0 §2 (Grant of
+                            Copyright License); adapter model card declares
+                            Apache-2.0)
+                            https://huggingface.co/lodestones/Kromoss/blob/7f9bb7b06d7b6c27d294b0bab5a2b3056c379279/README.md
+
+    MOSS HiRes v0.3 (experimental)
+                            Not supplied by publisher
+                            Output rights: UNVERIFIED — the licence text has not
+                            been read
+                            https://huggingface.co/comfyanonymous/MOSS_image_MAX_ULTRA_hires_lora_test/tree/9af7b1f3d135ce132cc6c4b8147030efff19507f
+
+    MOSS NSFW Uncensored (optional)
+                            Apache-2.0
+                            Output rights: yours (Apache-2.0 §2 (Grant of
+                            Copyright License))
+                            https://huggingface.co/axiomofmind/Moss-image-nsfw-uncensored-lora/blob/7f8c6953c6a88af8cbc8daeb34633c237dd1a7bb/LICENSE
+
     Qwen Image 2.1 (research licence)
                             Qwen Research License Agreement
                             Output rights: NOT FOR SALE — conservative Studio
@@ -420,6 +476,30 @@ in the app.
                             Output rights: yours (BSD 3-Clause License, grant
                             paragraph (xinntao/Real-ESRGAN LICENSE))
                             https://github.com/xinntao/Real-ESRGAN/blob/master/LICENSE
+
+    Music engine · ACE-Step 1.5 XL-SFT (experimental)
+                            MIT (ACE-Step's LICENSE; the ComfyUI repack's card tags apache-2.0 with no licence text)
+                            Output rights: yours (MIT License, grant paragraph
+                            (ACE-Step-1.5 LICENSE, Copyright (c) 2026 ACEStep))
+                            https://github.com/ace-step/ACE-Step-1.5/blob/main/LICENSE
+
+    Music engine · ACE-Step 1.5 XL-Turbo (experimental)
+                            MIT (ACE-Step's LICENSE; the ComfyUI repack's card tags apache-2.0 with no licence text)
+                            Output rights: yours (MIT License, grant paragraph
+                            (ACE-Step-1.5 LICENSE, Copyright (c) 2026 ACEStep))
+                            https://github.com/ace-step/ACE-Step-1.5/blob/main/LICENSE
+
+    Music engine · ACE-Step 1.5 XL-Base (experimental)
+                            MIT (ACE-Step's LICENSE; the ComfyUI repack's card tags apache-2.0 with no licence text)
+                            Output rights: yours (MIT License, grant paragraph
+                            (ACE-Step-1.5 LICENSE, Copyright (c) 2026 ACEStep))
+                            https://github.com/ace-step/ACE-Step-1.5/blob/main/LICENSE
+
+    Pictures · SDXL Turbo (fp16)
+                            Stability AI model terms (review repository)
+                            Output rights: UNVERIFIED — the licence text has not
+                            been read
+                            https://huggingface.co/stabilityai/sdxl-turbo
 
     MiniMax H3 fl2va W6A8 (experimental)
                             MiniMax H3 Community Licence
@@ -647,6 +727,33 @@ RUNTIME DEPENDENCIES (separate installations)
 ────────────────────────────────────────────────────────────────────────────────
 BUNDLED THIRD-PARTY CODE
 ────────────────────────────────────────────────────────────────────────────────
+    H3 control preprocessors
+                           Apache-2.0 source subset of Fannovel16's
+                           comfyui_controlnet_aux at revision
+                           59b1fc411ede8623b2997855b8018f0b3b6cf49f.
+                           Source: https://github.com/Fannovel16/comfyui_controlnet_aux
+                           Bundled in server/comfy_nodes/aiplay_h3_control/,
+                           with LICENSE, NOTICE and SOURCES.json recording
+                           original hashes and local adaptations.
+                           Depth Anything V2 includes DINOv2 code, copyright
+                           Meta Platforms, Inc. and affiliates; original
+                           notices and DINO/timm references are retained.
+                           Depth source: https://github.com/DepthAnything/Depth-Anything-V2
+                           TorchScript pose/detection uses the upstream affine
+                           transforms and SimCC decoding, with an OpenCV-only
+                           renderer. Related authors:
+                           https://github.com/IDEA-Research/DWPose
+                           https://github.com/Megvii-BaseDetection/YOLOX
+                           Adaptations use local imports, sequential transforms,
+                           Comfy-selected device and strict offline model lookup.
+                           No CMU/OpenPose implementation, downloader or ONNX
+                           backend is included. This attribution covers software
+                           only; estimator weights retain the separate terms
+                           and uncertainty notices in the model list above.
+                           The full-width control loader follows VideoX-Fun's
+                           documented tensor-layout conversion; its pinned
+                           source and exact adaptation are in the bundled NOTICE.
+
     MiniMax H3 Block Cache (T8)
                            Apache-2.0, Copyright T8mars.
                            Source: https://github.com/T8mars/comfyui-minimax-h3-blockcache-T8

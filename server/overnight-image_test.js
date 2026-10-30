@@ -16,10 +16,10 @@ const dispatchStart = index.indexOf("async function renderMediaForBatch(");
 const dispatchEnd = index.indexOf("const batch = new BatchRunner", dispatchStart);
 assert.ok(dispatchStart > 0 && dispatchEnd > dispatchStart);
 
-function imageForm(engine = "qwen-image-2.1", effective = engine, { draft } = {}) {
+function imageForm(engine = "qwen-image-2.1", effective = engine, { draft, mossPreset = "standard" } = {}) {
   const fields = {
     imgEngine: engine, imgCkpt: "chosen.safetensors", imgSize: "custom", imgW: "4096", imgH: "1024",
-    imgSteps: "25", imgCount: "2", imgPersona: "Lead", imgCfg: "2", imgNeg: "blur",
+    imgSteps: "25", imgMossPreset: mossPreset, imgCount: "2", imgPersona: "Lead", imgCfg: "2", imgNeg: "blur",
     imgRefSizing: "custom", imgTransparent: "", imgDitKind: effective, imgEncoder: "encoder.safetensors",
     imgVae: "vae.safetensors", imgSampler: "dpmpp_2m", imgSched: "karras", imgClipSkip: "2",
   };
@@ -32,7 +32,10 @@ function imageForm(engine = "qwen-image-2.1", effective = engine, { draft } = {}
      * reads it typeof-guarded, so a harness without it sends no draft. */
     ...(draft === undefined ? {} : { imgDraftOn: () => draft }),
   });
-  vm.runInContext(`${app.slice(uiStart, uiEnd)}; globalThis.idea = ovImageIdea('a {red|blue} coat');`, context);
+  const mossStart = app.indexOf("const IMG_MOSS_PRESETS = {");
+  const mossEnd = app.indexOf("\n};", mossStart) + 3;
+  const recipe = /^function imgMossRecipe\([^]*?^}/m.exec(app)[0];
+  vm.runInContext(`${app.slice(mossStart, mossEnd)}; ${recipe}; ${app.slice(uiStart, uiEnd)}; globalThis.idea = ovImageIdea('a {red|blue} coat');`, context);
   return { idea: JSON.parse(JSON.stringify(context.idea)), refs, loras };
 }
 
@@ -95,6 +98,16 @@ test("picked native Qwen companions survive, while ordinary checkpoint LoRAs kee
   assert.equal(cleaned.loras[0].strength, 0.8);
   assert.equal(cleaned.refImages[0], "first.png");
   assert.equal(cleaned.clipSkip, 2);
+});
+
+test("MOSS form CFG and negative reach the persisted Overnight job and actual dispatcher", async () => {
+  const idea = imageForm("moss-image").idea;
+  assert.equal(idea.cfg, 2); assert.equal(idea.negative, "blur");
+  assert.equal(idea.sampler, "er_sde"); assert.equal(idea.scheduler, "simple");
+  const { request } = await dispatch(cleanMediaItem(idea, "image"));
+  assert.equal(request.body.engine, "moss-image"); assert.equal(request.body.cfg, 2);
+  assert.equal(request.body.negative, "blur"); assert.equal(request.body.sampler, "er_sde");
+  assert.equal(request.body.draft, undefined);
 });
 
 test("Qwen's Fast draft chip reaches every take; off, or on another engine, nothing is sent", async () => {
@@ -181,5 +194,14 @@ test("a step that finished before the dispatcher listened is read from its own r
 
 test("MCP overnight items declare every added render field", () => {
   const schema = TOOLS.find((tool) => tool.name === "overnight_start").inputSchema.properties.items.items.properties;
-  for (const key of ["dit", "ditEngine", "encoder", "vae", "quality", "persona", "refImages", "refSizing", "refResolution", "transparent", "draft", "sampler", "scheduler", "clipSkip", "loras"]) assert.ok(schema[key], key);
+  for (const key of ["dit", "ditEngine", "encoder", "vae", "mossPreset", "quality", "persona", "refImages", "refSizing", "refResolution", "transparent", "draft", "sampler", "scheduler", "clipSkip", "loras"]) assert.ok(schema[key], key);
+});
+
+test("MOSS preset identity is retained by the real Overnight snapshot whitelist and dispatcher", async () => {
+  for (const mossPreset of ["standard","spectrum-manual-h1","spectrum-adaptive-h2","turbo-4","dmd-8"]) {
+    const idea=imageForm("moss-image","moss-image",{mossPreset}).idea;
+    const clean=cleanMediaItem(idea,"image"); assert.equal(clean.mossPreset,mossPreset);
+    const {request}=await dispatch(clean); assert.equal(request.body.mossPreset,mossPreset);
+    assert.equal(idea.sampler,["turbo-4","dmd-8"].includes(mossPreset)?"euler":"er_sde");
+  }
 });

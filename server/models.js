@@ -53,7 +53,10 @@
  * hardship: `homeFor()` links to the publisher, `download()` fetches from them,
  * and Studio never touches the bytes.
  */
-import { createWriteStream } from "node:fs";
+import { MODEL_BUNDLES, ACE_VARIANTS } from '../shared/model-bundles.js';
+import { MODEL_PROFILES } from '../shared/model-profiles.js';
+import { fetchModelFile } from './engine/model-catalog.js';
+import { createWriteStream, existsSync } from "node:fs";
 import { stat, mkdir, rename, unlink, statfs } from "node:fs/promises";
 import { EventEmitter, once } from "node:events";
 import path from "node:path";
@@ -63,6 +66,7 @@ import { config, isLightH3, offNvidia } from "./config.js";
 import { MODEL_FOLDERS, scanBases, findShelfModel, engineBases } from "./localmodels.js";
 import { H3_W6A8_FILES, H3_W6A8_CAVEAT, probeH3W6a8 } from "./h3-w6a8.js";
 import { YUE2_STYLE_ADAPTERS } from "./music/yue2-style-adapters.js";
+import { MOSS_PRESETS, MOSS_KROMOSS_MODEL, MOSS_DMD2_ADAPTER, MOSS_HIRES_ADAPTER, MOSS_UNCENSORED_ADAPTER } from "./moss-presets.js";
 /* H3's card tiers: the requirement numbers on every H3-family row, and the
  * flag that makes fit.js judge them by tier (server/h3tier.js, no second copy). */
 import {
@@ -121,21 +125,20 @@ const forCard = (files) => {
     .map((f) => (light && f.light) || (amd && f.amd) || f);
 };
 /**
- * The one shelf that is NOT models/.
- *
- * comfyui_controlnet_aux keeps its weights inside its own clone rather than in
- * the engine's models tree, and that is the only place it looks for them — so a
- * DWPose file written to models/ would be ignored and downloaded again. This
- * helper exists so the fact is stated once, in the same shape as M(), instead
- * of a raw path turning up in a `dest` where it would read as a typo.
- *
- * Writing here is safe rather than a race: the pack's own custom_hf_download()
- * opens with `if not os.path.exists(model_path)`
- * (src/custom_controlnet_aux/util.py:297), so a file already in place is used
- * as it stands and nothing is fetched a second time.
+ * External comfyui_controlnet_aux reads its own ckpts/<repo>/<file> tree.
+ * Keep that destination for external-only models and existing aux installs.
+ * Only the three files supported by Studio's bundled H3 nodes may instead use
+ * the model shelf on a fresh install; a weight download must not create an
+ * incomplete custom-node package. Installing aux later does not move these
+ * files: restart Studio to select the legacy shelf, then explicitly copy or
+ * choose Download again.
  */
-const CK = (p) => path.join(config.comfyDir, "custom_nodes", "comfyui_controlnet_aux", "ckpts", p);
-
+const CK = (p, bundledH3 = false) => {
+  const pack = path.join(config.comfyDir, "custom_nodes", "comfyui_controlnet_aux");
+  const legacy = path.join(pack, "ckpts", p);
+  return !bundledH3 || existsSync(legacy) || existsSync(path.join(pack, "__init__.py"))
+    ? legacy : M(path.join("controlnet", "aiplay_preprocessors", p));
+};
 /**
  * The other shelf that is NOT models/ — and deliberately not inside the engine
  * at all.
@@ -851,8 +854,11 @@ export const CATALOG = [
         alt: ["minimax_h3_fun_controlnet_union_pruned_bf16.safetensors"] },
     ],
     note: "2.3 GB, one file in models/model_patches, loaded by ModelPatchLoader and applied by "
-      + "MiniMaxH3FunControlNetApply. Needs ComfyUI 0.35 or newer \u2014 this rig runs 0.36. The 4.22 GB bf16 "
-      + "conversion of the same patch counts as present if you already have it.",
+      + "MiniMaxH3FunControlNetApply. Studio's local H3 Source clip path extracts Depth (Small) or Pose "
+      + "with its bundled offline nodes; the selected estimator weights are a separate download. "
+      + "The API also accepts an already prepared control map. This guides structure, not guaranteed identity "
+      + "or source-pixel preservation. Check reports missing models or engine nodes before rendering. "
+      + "The 4.22 GB bf16 conversion of the same patch counts as present if you already have it.",
     /* NOT h3Requires(): a control video riding along with H3 was never run at
      * a smaller size, so this row keeps full size's floor while H3 itself
      * offers a smaller size on 8 to 11 GB cards, and says why. The numbers are
@@ -862,6 +868,59 @@ export const CATALOG = [
                 note: "The same H3 render with a control video alongside it; the patch is resident for the whole pass. "
                   + `Stays at ${H3_VRAM_FULL_GB} GB although H3 itself offers ${H3_TIERS[1].width}x${H3_TIERS[1].height} on `
                   + `${H3_TIERS[1].minGb} to ${H3_VRAM_FULL_GB - 1} GB cards: a control video riding along has not been measured at the smaller size.` },
+  },
+
+  {
+    id: "videoH3FunControlFull",
+    label: "Video clips — full-width H3 video-to-video control (6.81 GB)",
+    why: "The original full-width AdaLN control patch for H3 checkpoints such as Singularity V2. "
+      + "Studio checks the selected checkpoint header and chooses this separate patch only for the full-width form. "
+      + "It guides source structure; checkpoint compatibility does not establish output quality or a memory guarantee.",
+    licence: "MiniMax H3 Community Licence (a patch on H3's weights)",
+    home: "https://huggingface.co/alibaba-pai/MiniMax-H3-Fun-Controlnet-Union",
+    /* Identical to the H3 rows above, deliberately: a patch cannot be freer
+     * than the weights it patches, and a reader should not have to cross-check
+     * two pages to learn that. */
+    region: {
+      excluded: ["European Union", "United Kingdom", "Republic of Korea", "United States of America"],
+      text: "A patch on MiniMax H3, so its Community Licence applies unchanged: rights only inside the Applicable "
+        + "Territory, which excludes the EU, the UK, the Republic of Korea and the United States of America. "
+        + "MiniMax's hosted API is available everywhere; it is running the open weights locally that is limited. "
+        + "The download goes straight to the publisher.",
+      url: "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE",
+    },
+    outputRights: {
+      class: "yours-with-conditions",
+      sellable: true,
+      quote: "MiniMax claims no rights over the Outputs you generate. You and your users are entirely responsible "
+        + "for the Outputs and any subsequent use thereof.",
+      clause: "MiniMax H3 Community License Agreement \u00a7VI.4 (Intellectual Property); this patch is a derivative of H3",
+      url: "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE",
+      conditions: [
+        "\u00a7V.4 \u2014 the Applicable Territory excludes the EU, the UK, the Republic of Korea and the USA; a clip driven by this patch is an H3 output and carries the same limit.",
+        "The footage you drive it WITH is your own affair: a control video you do not hold the rights to does not become yours by being re-rendered.",
+      ],
+      note: "A patch on H3's weights, not a model of its own: everything the H3 row says about outputs and territory applies unchanged.",
+    },
+    required: false,
+    addonFor: "video",
+    files: [{
+      url: "https://huggingface.co/alibaba-pai/MiniMax-H3-Fun-Controlnet-Union/resolve/4d670e9e8f1c96b001a8b8ddec0a269de448a1b0/MiniMax-H3-Fun-Controlnet-Union.safetensors",
+      dest: M("model_patches/MiniMax-H3-Fun-Controlnet-Union.safetensors"),
+      bytes: 6_806_843_904,
+      sha256: "919a48acb525dc8fc70287fcd94ec1f5e5e289a77f1df14d01099c6ce204eb02",
+    }],
+    note: "The original publisher file, loaded by Studio's bundled AiplayH3FullControlPatchLoader. "
+      + "The loader preserves full-width timestep modulation and only converts the documented tensor layout "
+      + "(Q/K/V order and gated-MLP half swap). It does not pad a pruned basis or change the selected checkpoint. "
+      + "Download is optional; read H3's terms. Full-width control memory and output quality require a measured local test.",
+    /* NOT h3Requires(): a control video riding along with H3 was never run at
+     * a smaller size, so this row keeps full size's floor while H3 itself
+     * offers a smaller size on 8 to 11 GB cards, and says why. The numbers are
+     * h3tier.js's own (full size, the lab's card, the RAM floor, the RAM the
+     * lab measured with), so they move with H3's. */
+    requires: { vramMinGb: H3_VRAM_FULL_GB, vramRecGb: H3_LAB_CARD_GB, ramMinGb: H3_RAM_FLOOR_GB, ramRecGb: H3_RAM_MEASURED_GB,
+                note: "The full-width control patch adds 6.81 GB of weights. Peak memory has not been measured; the ordinary H3 size estimate excludes this patch and guide extraction." },
   },
 
   {
@@ -1249,27 +1308,7 @@ export const CATALOG = [
       note: PERMISSIVE_NOTE + " ACE-Step's model card adds, of the music: \"You can strictly use the generated music for commercial purposes.\" A LoRA you add is licensed by its own author, and some forbid commercial use.",
     },
     required: false,
-    files: [
-      { url: `${HF}/Comfy-Org/ace_step_1.5_ComfyUI_files/resolve/694a9723ff772285c73f0700caacf944d3f02f8d/split_files/diffusion_models/acestep_v1.5_turbo.safetensors`,
-        dest: M("diffusion_models/acestep_v1.5_turbo.safetensors"),
-        bytes: 4_787_825_604,
-        sha256: "3f6e0797fad420a39bd33979eb6e840e30989e34a3794e843d23b60ec6e422d7" },
-      { url: `${HF}/Comfy-Org/ace_step_1.5_ComfyUI_files/resolve/694a9723ff772285c73f0700caacf944d3f02f8d/split_files/vae/ace_1.5_vae.safetensors`,
-        dest: M("vae/ace_1.5_vae.safetensors"),
-        bytes: 337_431_732,
-        sha256: "6de92e3a862acd287e08b024ac90f0783a8635451b728721a33ff03565bcb2bb" },
-      { url: `${HF}/Comfy-Org/ace_step_1.5_ComfyUI_files/resolve/694a9723ff772285c73f0700caacf944d3f02f8d/split_files/text_encoders/qwen_0.6b_ace15.safetensors`,
-        dest: M("text_encoders/qwen_0.6b_ace15.safetensors"),
-        bytes: 1_191_588_248,
-        sha256: "fd4590c82153b8ddb67e15a2e7aaa8afa8b83a858c8a9b82a4831063156aa7a7" },
-      /* The planner. `alt` makes the 1.7B count (ComfyUI's plain "split"
-       * template uses it): 3.7 GB against 8.4, for a smaller card. */
-      { url: `${HF}/Comfy-Org/ace_step_1.5_ComfyUI_files/resolve/694a9723ff772285c73f0700caacf944d3f02f8d/split_files/text_encoders/qwen_4b_ace15.safetensors`,
-        dest: M("text_encoders/qwen_4b_ace15.safetensors"),
-        alt: ["qwen_1.7b_ace15.safetensors"],
-        bytes: 8_379_154_232,
-        sha256: "ffe5ffb855086c2ab55e467e9859fb01894781020a0376484dd19de166b79873" },
-    ],
+    files: MODEL_BUNDLES['ace15-turbo'].files.map(f => ({ url: f.url, dest: M(f.relative), bytes: f.bytes, sha256: f.sha256, ...(f.relative.endsWith('qwen_4b_ace15.safetensors') ? { alt: ['qwen_1.7b_ace15.safetensors'] } : {}) })),
     note: "14.7 GB in four files (diffusion_models, vae, text_encoders). Turbo renders in 8 steps; ACE-Step documents 10 seconds to 10 minutes and 50+ languages. Covers and LoRAs work on turbo; Extract, Lego and Complete need ACE-Step's base model, which Studio does not drive. Not yet timed on this machine. Model card and docs: https://huggingface.co/ACE-Step/Ace-Step1.5",
     requires: {
       vramMinGb: 8, vramRecGb: 16, ramMinGb: 16, ramRecGb: 32,
@@ -1886,10 +1925,17 @@ export const CATALOG = [
     files: [
       { url: `${HF}/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors`,
         dest: M("diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors"), bytes: 20970379616 },
+      /* No V1.0 alt: an existing V1.0 still renders as the config fallback,
+       * while this row must offer the actual V1.1 update rather than call it
+       * installed because another version exists. */
+      { url: `${HF}/lightx2v/Minimax-h3-Turbo/resolve/30f485ed874aa44c8183348ad361c5eabad318da/minimax_h3_ref2v_turbo_8step_v1.1_768p_comfyui_bf16.safetensors`,
+        dest: M("loras/minimax_h3_ref2v_turbo_8step_v1.1_768p_comfyui_bf16.safetensors"),
+        bytes: 1_956_193_000,
+        sha256: "e56863a7524e0300729cbb7b64cc8b548d90698c1abbf7d83898b0122fbe1e81" },
       { url: `${HF}/Comfy-Org/MiniMax-H3/resolve/main/loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors`,
         dest: M("loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"), bytes: 1956193000 },
     ],
-    note: "23 GB, optional. Shares the text encoder and VAEs with the video capability, so install that first.",
+    note: "24.9 GB, optional: ref2va checkpoint plus REF2V 8-step V1.1 and 4-step v0.1. Shares the text encoder and VAEs with the video capability, so install that first. V1.1 is preferred at 8 steps; an existing V1.0 is retained as fallback.",
     /* H3's tiers. Measured under an 8 GB cap: the 8-step reference path with
      * one picture fit at 960x544, 5 s, with only 314 MiB to spare (lab L8r);
      * several pictures and the song under the clip were never capped, and it
@@ -2058,6 +2104,100 @@ export const CATALOG = [
       { label: "Encoder Qwen3-4B fp4 mixed", bytes: 3479416193, note: "Blackwell-only, like the fp4 DiT." },
       { label: "Turbo distill patch LoRA bf16", bytes: 158826336, note: "Turns the BASE model into the turbo one at load time, for people who only want one 12 GB checkpoint on disk. Not used here — two standalone int8 checkpoints are smaller than one bf16 plus the patch." },
     ],
+  },
+  {
+    id: "moss-image", makes: "picture", group: "images",
+    label: "MOSS-Image SFT (experimental)",
+    why: "Text-to-image with the native MOSS-Image SFT preset. Reference editing stays on Qwen Image 2.1.",
+    licence: "Apache-2.0", home: "https://huggingface.co/Comfy-Org/MOSS-Image",
+    outputRights: { class: "unrestricted", sellable: true, quote: APACHE_GRANT,
+      clause: "Apache-2.0 §2 (Grant of Copyright License)",
+      url: "https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT/blob/main/LICENSE",
+      note: PERMISSIVE_NOTE },
+    required: false,
+    files: [
+      { url: `${HF}/Comfy-Org/MOSS-Image/resolve/24147db865fcdc207270f844777587223fed8d6e/diffusion_models/moss_image_sft_int8_convrot.safetensors`,
+        dest: M("diffusion_models/moss_image_sft_int8_convrot.safetensors"), bytes: 5_413_698_958,
+        sha256: "b4d1475bc7eeffd7b809e82ea13a1fba1fb85c4e18365af3813722faa5c0fe4f" },
+      { url: `${HF}/Comfy-Org/MOSS-Image/resolve/24147db865fcdc207270f844777587223fed8d6e/text_encoders/qwen3.5_9b_w4a8_gptq.safetensors`,
+        dest: M("text_encoders/qwen3.5_9b_w4a8_gptq.safetensors"), bytes: 7_343_591_088,
+        sha256: "4cc6a1543ad2061806da46f35f90cadb4801dcba246c44782cf42ec0feb6407c" },
+      { url: `${HF}/Comfy-Org/MOSS-Image/resolve/24147db865fcdc207270f844777587223fed8d6e/vae/flux2-vae_small.safetensors`,
+        dest: M("vae/flux2-vae_small.safetensors"), bytes: 249_521_340,
+        sha256: "d8d52ba036475f5fb07c8b435e176d3d97ebfa82f0d1a1c317f9cc1e25bd013b" },
+    ],
+    note: "13.01 GB in three native files. Requires ComfyUI's MOSS-Image architecture and moss_image text encoder type. Preset: 25 steps, CFG 2.5, er_sde/simple; prompt upsampling and skip-layer guidance off. Text-to-image only. Local quality, speed and memory limits are still being evaluated.",
+    requires: { experimental: true, note: "No measured minimum memory requirement. Native runtime support is checked before queueing; older engines are not updated automatically." },
+  },
+  {
+    id: MOSS_KROMOSS_MODEL.catalogueId, model: "moss-image", addonFor: "moss-image", group: "images", required: false,
+    label: "Kromoss INT8 (experimental)",
+    why: "A full MOSS fine-tune. Choose Kromoss Standard in Pictures for a matched comparison with MOSS SFT.",
+    licence: "Apache-2.0", home: HF + "/" + MOSS_KROMOSS_MODEL.repo,
+    outputRights: { class: "unrestricted", sellable: true, quote: APACHE_GRANT,
+      clause: "Apache-2.0 §2 (Grant of Copyright License)",
+      url: HF + "/" + MOSS_KROMOSS_MODEL.repo + "/blob/" + MOSS_KROMOSS_MODEL.revision + "/LICENSE", note: PERMISSIVE_NOTE },
+    files: [{ url: MOSS_KROMOSS_MODEL.url, dest: M("diffusion_models/" + MOSS_KROMOSS_MODEL.filename), bytes: MOSS_KROMOSS_MODEL.bytes, sha256: MOSS_KROMOSS_MODEL.sha256 }],
+    note: "5.41 GB checkpoint. Reuses MOSS's Qwen3.5 GPTQ text encoder and small FLUX.2 VAE. The explicit Standard preset uses 25 steps, CFG 2.5, ER-SDE/simple and no skip-layer guidance. Publisher quality claims and timings from another checkpoint are not local benchmark results.",
+    requires: { experimental: true, note: "Needs the MOSS encoder and VAE plus native ComfyUI MOSS support. Exact checkpoint SHA is checked before queueing." },
+  },
+  ...["turbo-4", "dmd-8"].map(preset => {
+    const { adapter, steps } = MOSS_PRESETS[preset];
+    return {
+      id: "moss-image-" + preset, addonFor: "moss-image", group: "images", required: false,
+      label: "MOSS-Image " + (steps === 4 ? "Turbo 4" : "DMD 8") + " (experimental)",
+      why: steps + "-step text-to-image adapter for the native MOSS SFT engine. Choose its explicit Preset in Pictures.",
+      licence: "Apache-2.0", home: HF + "/" + adapter.repo,
+      outputRights: { class: "unrestricted", sellable: true, quote: APACHE_GRANT,
+        clause: "Apache-2.0 §2 (Grant of Copyright License); adapter model card declares Apache-2.0",
+        url: HF + "/" + adapter.repo + "/blob/" + adapter.revision + "/README.md", note: PERMISSIVE_NOTE },
+      files: [{ url: adapter.url, dest: M("loras/" + adapter.filename), bytes: adapter.bytes, sha256: adapter.sha256 }],
+      note: "1.19 GB, one model-only LoRA at strength 1. Requires the three MOSS-Image base files. "
+        + steps + " steps, CFG 1, Euler/simple; at most 1024 squared pixels and a 1536-pixel side. "
+        + "Tested on the INT8 base using native LoRA requantization, not publisher BF16-equivalent precision. "
+        + (steps === 4 ? "Fastest tested option; the portrait was softer and composition changed." : "Slightly slower than Turbo 4; more mug/grip detail in the tested portrait.")
+        + " See docs/MOSS_IMAGE.md for the three-prompt comparison and limits.",
+      requires: { experimental: true, note: "Shares the native MOSS base and runtime. No measured minimum memory requirement; exact adapter SHA is checked before queueing." },
+    };
+  }),
+  {
+    id: MOSS_DMD2_ADAPTER.catalogueId, addonFor: "moss-image", group: "images", required: false,
+    label: "Kromoss DMD2 8 (experimental)",
+    why: "Eight-step adapter for the Kromoss checkpoint. Choose its explicit Preset in Pictures.",
+    licence: "Apache-2.0", home: HF + "/" + MOSS_DMD2_ADAPTER.repo,
+    outputRights: { class: "unrestricted", sellable: true, quote: APACHE_GRANT,
+      clause: "Apache-2.0 §2 (Grant of Copyright License); adapter model card declares Apache-2.0",
+      url: HF + "/" + MOSS_DMD2_ADAPTER.repo + "/blob/" + MOSS_DMD2_ADAPTER.revision + "/README.md", note: PERMISSIVE_NOTE },
+    files: [{ url: MOSS_DMD2_ADAPTER.url, dest: M("loras/" + MOSS_DMD2_ADAPTER.filename), bytes: MOSS_DMD2_ADAPTER.bytes, sha256: MOSS_DMD2_ADAPTER.sha256 }],
+    note: "1.19 GB, strength 1, 8 steps, CFG 1, Euler/simple. Requires Kromoss INT8 plus the shared MOSS encoder and VAE. At most 1024 squared pixels and a 1536-pixel side. Native INT8 LoRA requantization is not claimed equivalent to publisher BF16 precision. No adapter stacks.",
+    requires: { experimental: true, note: "Exact checkpoint and adapter SHA checks run before queueing. Local speed and quality remain under evaluation." },
+  },
+  {
+    id: MOSS_HIRES_ADAPTER.catalogueId, addonFor: "moss-image", group: "images", required: false,
+    label: "MOSS HiRes v0.3 (experimental)",
+    why: "High-resolution LoHa adapter for the MOSS SFT checkpoint, with an explicit bounded preset.",
+    licence: "Not supplied by publisher", home: HF + "/" + MOSS_HIRES_ADAPTER.repo,
+    outputRights: { class: "unknown", sellable: null, quote: "",
+      clause: "", url: HF + "/" + MOSS_HIRES_ADAPTER.repo + "/tree/" + MOSS_HIRES_ADAPTER.revision,
+      note: "MOSS SFT's Apache-2.0 licence does not establish separate adapter terms. Check with the adapter publisher before commercial use." },
+    files: [{ url: MOSS_HIRES_ADAPTER.url, dest: M("loras/" + MOSS_HIRES_ADAPTER.filename), bytes: MOSS_HIRES_ADAPTER.bytes, sha256: MOSS_HIRES_ADAPTER.sha256 }],
+    note: "182 MB, strength 1, 25 steps, CFG 4, ER-SDE/simple, exactly 2048x2048 and one image per request. Uses native VAE decoding; no silent tiled fallback. Requires the three MOSS SFT base files. Quality and memory limits remain under evaluation.",
+    requires: { experimental: true, note: "Exact adapter SHA is checked before queueing. No universal VRAM minimum has been measured." },
+  },
+  {
+    id: MOSS_UNCENSORED_ADAPTER.catalogueId, addonFor: "moss-image", group: "images", required: false,
+    label: "MOSS NSFW Uncensored (optional)",
+    why: "Optional model-only LoRA for MOSS-Image SFT. Choose NSFW Uncensored in Pictures.",
+    licence: "Apache-2.0", home: HF + "/" + MOSS_UNCENSORED_ADAPTER.repo,
+    outputRights: { class: "unrestricted", sellable: true, quote: APACHE_GRANT,
+      clause: "Apache-2.0 §2 (Grant of Copyright License)",
+      url: HF + "/" + MOSS_UNCENSORED_ADAPTER.repo + "/blob/" + MOSS_UNCENSORED_ADAPTER.revision + "/LICENSE", note: PERMISSIVE_NOTE },
+    files: [{ url: MOSS_UNCENSORED_ADAPTER.url, dest: M("loras/" + MOSS_UNCENSORED_ADAPTER.filename), bytes: MOSS_UNCENSORED_ADAPTER.bytes, sha256: MOSS_UNCENSORED_ADAPTER.sha256 }],
+    note: "74.38 MB, native ComfyUI LoRA at model strength 0.7 with no CLIP patch. Begin the prompt with moss_xvstyle. "
+      + "Requires the MOSS SFT base files. This explicit preset uses 30 steps, CFG 3, ER-SDE/simple and no skip-layer guidance; "
+      + "it does not silently insert the trigger or match every setting of the publisher's Diffusers example. "
+      + "The separate PEFT, GGUF and merged-model files are not used. Native INT8 requantization is not claimed equivalent to publisher BF16 precision.",
+    requires: { experimental: true, note: "Exact adapter SHA and native MOSS LoRA support are checked before queueing. No measured content quality or minimum memory claim." },
   },
   {
     // Official ComfyUI repack, checked against Hugging Face's LFS metadata on
@@ -2277,21 +2417,13 @@ export const CATALOG = [
       note: "Studio's own provenance ledger and embedded C2PA-style markers are on the right side of §6 — they add disclosure rather than removing it. §2.1 is about YOUR revenue, not the clip's price: below $10M a year, selling the clip needs nothing from Lightricks.",
     },
 
-    /* 🔴 GATED. Unlike everything else in this catalogue, these files 401 to an
-     * anonymous request: Lightricks requires you to accept the licence on the
-     * model page and authenticate. The downloader below has no credential path
-     * and MUST NOT grow one — a token belongs in the user's own keychain, not in
-     * this app's config. `scripts/fetch_ltx25.py` does the fetch instead, reading
-     * the token the hf CLI stored, and never printing or copying it.
-     *
-     * The command here is `hf auth login`, NOT `huggingface-cli login`. The
-     * latter is dead as of huggingface_hub 1.x -- it refuses outright rather
-     * than warning and continuing -- and this text told people to run it, so
-     * the very first step failed with an error that looked nothing like a
-     * licence problem. Anyone following it could not get past step one. */
+    /* Access stays between the person and Hugging Face. The optional guided
+     * setup uses an explicitly connected read key from Studio's existing vault,
+     * never settings.json. Ordinary catalogue downloads still refuse this row;
+     * only the local access controller can mint its short-lived permission. */
     gated: {
       url: "https://huggingface.co/Lightricks/LTX-2.5",
-      how: "Accept the licence on the model page, then in the ComfyUI python environment run `hf auth login` followed by `python scripts/fetch_ltx25.py`. About 40 GB.",
+      how: "Optional LTX model. Open Models > Set up LTX, approve access on the publisher's page, connect Hugging Face, then install. About 40 GB.",
     },
 
     /* ⚠ DELIBERATELY NO `region` FIELD.
@@ -2302,24 +2434,8 @@ export const CATALOG = [
      * shape and belong in `note`: a paid agreement at $10M annual revenue OR
      * MORE (§2.1 — exactly $10M is above the line), and Attachment A §20 forbids
      * use in a product that competes with Lightricks' own offerings. */
-    files: [
-      { url: `${HF}/Lightricks/LTX-2.5/resolve/main/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors`,
-        dest: M("diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors"), bytes: 21504034224 },
-      { url: `${HF}/Lightricks/LTX-2.5/resolve/main/text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors`,
-        dest: M("text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors"), bytes: 15372969374 },
-      { url: `${HF}/Lightricks/LTX-2.5/resolve/main/vae/ltx-2.5-video-vae-conv-bf16.safetensors`,
-        dest: M("vae/ltx-2.5-video-vae-conv-bf16.safetensors"), bytes: 1452269922,
-        /* The DIFFUSION-decoder VAE (CausalDiffusionVAE, 1.47 GB) is what the
-         * ComfyUI LTX 2.5 template names. ComfyUI's VAELoader reads either,
-         * and config.js loads it when the conv one is absent. */
-        alt: ["ltx-2.5-video-vae-bf16.safetensors"] },
-      { url: `${HF}/Lightricks/LTX-2.5/resolve/main/vae/ltx-2.5-audio-vae-bf16.safetensors`,
-        dest: M("vae/ltx-2.5-audio-vae-bf16.safetensors"), bytes: 364866540 },
-      // Not optional. The whole speed advantage is sampling at half size and
-      // upscaling the LATENT — without this there is no second pass.
-      { url: `${HF}/Lightricks/LTX-2.5/resolve/main/latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors`,
-        dest: M("latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"), bytes: 995778752 },
-    ],
+    files: MODEL_BUNDLES.ltx25.files.map(f => ({ url: f.url, dest: M(f.relative), bytes: f.bytes, sha256: f.sha256,
+      ...(f.relative.endsWith('ltx-2.5-video-vae-conv-bf16.safetensors') ? { alt: ['ltx-2.5-video-vae-bf16.safetensors'] } : {}) })),
     note: "39.69 GB. Measured here at 121 s for a 5-second 1280x704 clip with audio — against 308 s for MiniMax H3 at 8 steps and 660 s at 20, and better by eye. The speed is the schedule, not the model: 8 steps at half resolution, a latent upscale, then 3 steps at full size. ⚠ Free below $10M annual revenue; at or above that Lightricks require a paid agreement, and their licence forbids use in a product competing with their own.",
     requires: {
       vramMinGb: 16, vramRecGb: 16, ramMinGb: 32, ramRecGb: 32,
@@ -2489,34 +2605,32 @@ export const CATALOG = [
         + "the yzd-v/DWPose repository usually named as its origin. The Apache-2.0 licence linked "
         + "above, IDEA-Research's, is reached only by a filename match, and a filename is not a grant. "
         + "In practice a skeleton is a measurement of a video you supplied, and the clip it goes on to "
-        + "steer carries the RENDERING model's terms — WAN 2.1 VACE's, which are settled Apache-2.0 — "
+        + "steer carries the rendering model's own terms, including H3's territory terms when used with H3, "
         + "so this is narrower than it sounds. Read the chain yourself before relying on the skeleton "
         + "itself being licensed. Separately, and binding whoever trained the model rather than "
         + "whoever runs it: DWPose was trained on COCO-WholeBody and UBody, which carry dataset terms "
         + "of their own.",
     },
 
-    /* ⚠ THE DESTINATION IS INSIDE A CUSTOM NODE PACK, not models/. That is
-     * where comfyui_controlnet_aux looks, and the only place it looks — and
-     * pre-placing a file really does prevent the download rather than racing
-     * it: its own custom_hf_download() begins `if not os.path.exists(
-     * model_path)` (src/custom_controlnet_aux/util.py:297), so a file already
-     * sitting there is used as it stands. This is the OPPOSITE of the demucs
-     * entry a few hundred lines up, which lists no files at all precisely
-     * because demucs ignores anything we could put on disk and fetches its own
-     * bundles regardless. Two capabilities, two behaviours, both checked.
-     *
-     * It also gives this row an honest readiness for free: the path exists only
-     * once the node pack is cloned, so a machine without the pack reports these
-     * files missing instead of reporting ready and then failing inside the
-     * engine on a class_type nobody installed. */
+    /* CK prefers an existing comfyui_controlnet_aux shelf and otherwise uses
+     * models/controlnet/aiplay_preprocessors. The H3 nodes only read local
+     * TorchScript files; they never fetch weights. Check separately verifies
+     * both the catalogue files and the engine's actual node schemas. */
     files: [
       { url: `${HF}/hr16/yolox-onnx/resolve/a124b32c3b7c5cebda1c7cd96178f0f9d2050125/yolox_l.torchscript.pt`,
-        dest: CK("hr16/yolox-onnx/yolox_l.torchscript.pt"), bytes: 217697649 },
+        dest: CK("hr16/yolox-onnx/yolox_l.torchscript.pt", true), bytes: 217697649 },
       { url: `${HF}/hr16/DWPose-TorchScript-BatchSize5/resolve/359d662a9b33b73f6d0f21732baf8845f17bb4be/dw-ll_ucoco_384_bs5.torchscript.pt`,
-        dest: CK("hr16/DWPose-TorchScript-BatchSize5/dw-ll_ucoco_384_bs5.torchscript.pt"), bytes: 135059124 },
+        dest: CK("hr16/DWPose-TorchScript-BatchSize5/dw-ll_ucoco_384_bs5.torchscript.pt", true), bytes: 135059124 },
     ],
-    note: "353 MB, and 26.4 s to read a 121-frame 1280x704 clip on this rig. Both files are the TorchScript builds ON PURPOSE, and neither default would have picked them: the node's own default bbox detector is the ONNX one, and loading that drags in onnxruntime — which here is the CPU build the DAW's transcription depends on, so the wrong default breaks a feature in a different half of the app and nothing about a pose extraction would tell you why. ⚠ Needs the ComfyUI node pack comfyui_controlnet_aux (Fannovel16, Apache-2.0 — its LICENSE.txt was diffed against the canonical text and is identical, zero differences across the whole file); the files above live inside that pack's own ckpts/ folder, so this row cannot read ready until the pack is cloned. ⚠ And the limit the pose gate found: DWPose saw no figure in 43 of 121 flat-shaded anime output frames, because yolox is trained on photographs. It reads live footage well and drawings badly.",
+    note: "353 MB, two explicit TorchScript files. H3 Source clip / Pose uses Studio's bundled offline "
+      + "AiplayH3PoseGuide (Apache-2.0 source), without an ONNX backend or an automatic download. Existing aux "
+      + "installations keep their ckpts shelf; fresh H3 setups use models/controlnet/aiplay_preprocessors. "
+      + "The older 26.4 s / 121-frame 1280x704 measurement belongs to the separate pose gate, not this H3 path. "
+      + "That gate found no figure in 43 of 121 flat-shaded anime frames; photographic footage is a better source. "
+      + "Legacy VACE Pose separately requires comfyui_controlnet_aux (Apache-2.0 code). After adding aux later, "
+      + "restart Studio so this row selects that pack's ckpts shelf. Then copy existing H3 files to its matching "
+      + "ckpts/<repo> folders or choose Download again; a second copy may be needed. Studio does not move weights "
+      + "automatically. Source-code licensing does not settle the estimator weights' unread terms above.",
     requires: {
       vramMinGb: 4, vramRecGb: 6, ramMinGb: 8, ramRecGb: 16,
       note: "Small and quick beside everything else here — 26.4 s for 121 frames at 1280x704, measured "
@@ -2538,9 +2652,8 @@ export const CATALOG = [
    * sellable one; server/control/depth.js picks it unless asked, because the
    * node's OWN default is the Large model.
    *
-   * Destination as the DWPose row: inside comfyui_controlnet_aux's ckpts
-   * folder, where its loader looks first and downloads only if the file is
-   * absent (util.py:297), so a pre-placed file is used as it stands. */
+   * Small can use the bundled H3 shelf on a fresh setup. Large is external-aux-only
+   * and always keeps the original legacy ckpts destination. */
   {
     id: "depthPreprocess",
     group: "video",   // Models screen section: feeds the video / Motion look path, not music
@@ -2554,14 +2667,21 @@ export const CATALOG = [
       quote: "Depth-Anything-V2-Small model is under the Apache-2.0 license.",
       clause: "README, LICENSE section (DepthAnything/Depth-Anything-V2, main); Apache-2.0 §2",
       url: "https://github.com/DepthAnything/Depth-Anything-V2#license",
-      note: "Apache-2.0 §2 grants the usual rights over the Work and says nothing about generated material; a depth video is a measurement of a clip you supplied, and the clip it goes on to steer carries the RENDERING model's terms — WAN 2.1 VACE's, settled Apache-2.0. The one thing to know: the Large model in the row beside this one is CC-BY-NC-4.0, and the card defaults to this one for exactly that reason.",
+      note: "Apache-2.0 §2 grants the usual rights over the Work and says nothing about generated material; a depth video is a measurement of a clip you supplied, and the clip it goes on to steer carries the rendering model's own terms, including H3's territory terms when used with H3. The one thing to know: the Large model in the row beside this one is CC-BY-NC-4.0, and the card defaults to this one for exactly that reason.",
     },
     files: [
       { url: `${HF}/depth-anything/Depth-Anything-V2-Small/resolve/03876f8651c73a60fe4c2c48294e09fcb6838fcf/depth_anything_v2_vits.pth`,
-        dest: CK("depth-anything/Depth-Anything-V2-Small/depth_anything_v2_vits.pth"), bytes: 99218434,
+        dest: CK("depth-anything/Depth-Anything-V2-Small/depth_anything_v2_vits.pth", true), bytes: 99218434,
         sha256: "715fade13be8f229f8a70cc02066f656f2423a59effd0579197bbf57860e1378" },
     ],
-    note: "99 MB. The destination is inside comfyui_controlnet_aux's own ckpts folder, where its loader looks first and downloads only if the file is absent — the same arrangement the DWPose row uses. ⚠ The node's own default is the LARGE model; server/control/depth.js picks this one unless asked, and the control card says which one made each depth video.",
+    note: "99 MB. H3 Source clip / Depth uses Studio's bundled offline AiplayH3DepthGuide and explicitly "
+      + "selects this Small model. Existing aux installations keep their ckpts shelf; fresh H3 setups use "
+      + "models/controlnet/aiplay_preprocessors. Missing weights are offered before rendering, never fetched by the node. "
+      + "The separate Motion look control card can also offer Large under its own terms; the H3 source path does not "
+      + "select or substitute Large. Legacy VACE Depth requires the separate comfyui_controlnet_aux node pack "
+      + "(Apache-2.0 code). After adding aux later, restart Studio so this row selects that pack's ckpts shelf. "
+      + "Then explicitly copy the existing Small file to its matching ckpts/<repo> folder or choose Download again; "
+      + "Studio does not move weights automatically.",
     requires: {
       vramMinGb: 2, vramRecGb: 4, ramMinGb: 8, ramRecGb: 16,
       note: "A ViT-S at 518 px per frame — small beside everything else here, and it runs before the "
@@ -2588,7 +2708,9 @@ export const CATALOG = [
         dest: CK("depth-anything/Depth-Anything-V2-Large/depth_anything_v2_vitl.pth"), bytes: 1341395338,
         sha256: "a7ea19fa0ed99244e67b624c72b8580b7e9553043245905be58796a608eb9345" },
     ],
-    note: "1.3 GB, optional, NON-COMMERCIAL. The Small row is the default and the sellable one.",
+    note: "1.3 GB, optional, NON-COMMERCIAL. The Small row is the default and the sellable one. "
+      + "Requires the external comfyui_controlnet_aux node pack (Apache-2.0 code); install it first. "
+      + "This file stays under that pack's ckpts folder. Studio's bundled H3 nodes do not support Large.",
     requires: {
       vramMinGb: 4, vramRecGb: 6, ramMinGb: 8, ramRecGb: 16,
       note: "A ViT-L at 518 px per frame; still well under the video model it runs before.",
@@ -3086,6 +3208,25 @@ export const CATALOG = [
 
 /* Optional downloads stay separate from each engine's ordinary install. The
  * files have no alternates: another checkpoint is not the selected experiment. */
+// Exact XL manifests use the existing catalogue/downloader. Native ACE minima
+// do not establish a ComfyUI BF16 + 4B-planner floor, so fit stays unknown.
+CATALOG.push(...ACE_VARIANTS.filter(v => v.id !== 'ace15-turbo').map(v => ({
+  ...CATALOG.find(c => c.id === 'musicAceStep15'), id: v.capability,
+  label: 'Music engine · ACE-Step 1.5 ' + v.variant + ' (experimental)', required: false,
+  files: v.files.map(f => ({ url: f.url, dest: M(f.relative), bytes: f.bytes, sha256: f.sha256 })),
+  why: 'The publisher’s XL variant using the existing ACE ComfyUI workflow.',
+  note: MODEL_PROFILES.find(p => p.id === v.id).evidence,
+  requires: { hardwareAcceptance: MODEL_PROFILES.find(p => p.id === v.id).hardwareAcceptance, experimental: true, experimentalWhy: 'ComfyUI BF16 XL with the 4B planner: a minimum hardware floor has not been established. Native-backend minima do not establish this configuration’s fit.' },
+})));
+CATALOG.push({ id: 'imageSdxlTurbo', makes: 'picture', label: 'Pictures · SDXL Turbo (fp16)', required: false,
+  home: MODEL_BUNDLES['sdxl-turbo'].licenseUrl, licence: 'Stability AI model terms (review repository)',
+  why: 'A compact checkpoint using the existing picture workflow.',
+  outputRights: { class: 'unknown', sellable: null, url: MODEL_BUNDLES['sdxl-turbo'].licenseUrl, note: 'Review the publisher’s current model terms before use.' },
+  files: MODEL_BUNDLES['sdxl-turbo'].files.map(f => ({ url: f.url, dest: M(f.relative), bytes: f.bytes, sha256: f.sha256 })),
+  note: 'A40 image acceptance documented. Other hardware is estimated. 512 × 512, 4 steps, CFG 1.',
+  requires: { vramMinGb: 8, vramRecGb: 12, ramMinGb: 16, ramRecGb: 32, note: 'Conservative planning estimate for 512 × 512, batch 1; not a measured minimum.' },
+});
+
 CATALOG.push(...H3_W6A8_FILES.map((build) => ({
   id: build.id, addonFor: build.addonFor,
   // These optional checkpoint files identify the same canonical generator.
@@ -3225,6 +3366,7 @@ export const MODEL_TO_CAPABILITY = {
   "zimage-base": "imageZImageBase",
   "krea2": "imageKrea2",
   "qwen-image-2.1": "qwen-image-2.1",
+  "moss-image": "moss-image",
   // The engine name /api/image accepts is "anima"; the two files it needs are
   // the imageAnima entry. Missing here, every Anima render stamped its rights
   // `unknown` while ANIMA_RIGHTS sat in the catalogue two hundred lines up —
@@ -3707,10 +3849,14 @@ export function modulesOf(cap) {
   return cap?.needsModules || (cap?.needsPackage ? [cap.needsPackage] : []);
 }
 
+export function musicCapabilityFor(engine, dit = config.music.aceModel) {
+  return engine === 'ace-step15' ? ACE_VARIANTS.find(v => v.dit === dit)?.capability || MODEL_TO_CAPABILITY[engine] : MODEL_TO_CAPABILITY[engine];
+}
 export function markRequired(rows, { music = config.music, api = config.api } = {}) {
   const engines = music?.engines || {};
   const musicRows = new Set(Object.values(engines).map((e) => e?.capability).filter(Boolean));
-  const selected = engines[music?.engine]?.capability || null;
+  for (const v of ACE_VARIANTS) musicRows.add(v.capability);
+  const selected = music?.engine === 'ace-step15' ? musicCapabilityFor(music.engine, music.aceModel) : engines[music?.engine]?.capability || null;
   const hosted = !!api?.enabled && music?.engine === "minimax-music3";
   const chosen = !hosted && !!selected && rows.some((r) => r.id === selected && r.ready);
   return rows.map((r) => (!musicRows.has(r.id) ? r : {
@@ -3718,6 +3864,24 @@ export function markRequired(rows, { music = config.music, api = config.api } = 
     required: chosen && r.id === selected,
     requiredGroup: hosted || chosen ? null : "music",
   }));
+}
+
+// Opaque, short-lived server permissions cannot be constructed from a JSON
+// request. The token lives only in this WeakMap and the active download closure.
+const localLtxPermissions = new WeakMap();
+export function authorizeLocalLtxDownload(token, { acceptLicense = false } = {}) {
+  if (acceptLicense !== true) throw Error('Review and accept the LTX model terms first.');
+  if (typeof token !== 'string' || token.length < 10 || token.length > 500 || !/^hf_[A-Za-z0-9_.-]+$/.test(token))
+    throw Error('Connect a valid Hugging Face read token.');
+  const permission = Object.freeze({});
+  localLtxPermissions.set(permission, { token, expiresAt: Date.now() + 60_000 });
+  return permission;
+}
+function localLtxError(error, auth) {
+  if (!auth) return error;
+  const message = String(error?.message || error).split(auth.token).join('[redacted]')
+    .replace(/\bhf_[A-Za-z0-9_.-]+\b/g, '[redacted]');
+  return new Error(message);
 }
 
 export class ModelManager extends EventEmitter {
@@ -3888,9 +4052,10 @@ export class ModelManager extends EventEmitter {
    * `.part` and only moved into place once the size matches exactly, so an
    * interrupted run can never leave a truncated file that looks complete.
    */
-  async download(id, { acceptRegion = false } = {}) {
-    const cap = CATALOG.find((c) => c.id === id);
+  async download(id, { acceptRegion = false, exact = false, localAccess = null } = {}) {
+    let cap = CATALOG.find((c) => c.id === id);
     if (!cap) throw new Error(`unknown capability: ${id}`);
+    if (exact) cap = { ...cap, files: cap.files.map(f => ({ ...f, alt: [] })) };
     /* Enforced at the downloader, not at the button. A region-locked capability
      * cannot be fetched by a client that skipped the warning, by a stale page,
      * or by curl — which is the only version of this that means anything. */
@@ -3903,11 +4068,14 @@ export class ModelManager extends EventEmitter {
     /* A gated repo needs an accepted licence and a token, and this downloader
      * deliberately has neither. Failing here with instructions beats a 401 that
      * looks like a network error. */
-    if (cap.gated) {
+    const auth = id === 'videoLtx' && localAccess && localLtxPermissions.get(localAccess);
+    if (cap.gated && (!auth || auth.expiresAt < Date.now())) {
       const e = new Error(cap.gated.how);
       e.gated = cap.gated;
       throw e;
     }
+    if (auth && cap.files.some(f => !MODEL_BUNDLES.ltx25.files.some(p => p.url === f.url)))
+      throw Error('LTX setup only downloads the pinned publisher bundle.');
     if (cap.compatibilityKind === "h3-w6a8") {
       const compatibility = probeH3W6a8(config);
       if (!compatibility.downloadable) {
@@ -3936,19 +4104,28 @@ export class ModelManager extends EventEmitter {
     if (previous) {
       if (!this.cancelled.has(id)) return { alreadyRunning: true };
       await previous;
-      return this.download(id, { acceptRegion });
+      return this.download(id, { acceptRegion, exact, localAccess });
+    }
+    // Split profiles share VAE/encoders and therefore the same resumable .part
+    // files. Reserve synchronously before filesystem awaits to prevent two
+    // capabilities writing the same partial. Other independent downloads work.
+    const destinations = new Set(cap.files.map(f => path.resolve(f.dest)));
+    for (const pending of this.#pending.keys()) {
+      if (CATALOG.find(c => c.id === pending)?.files.some(f => destinations.has(path.resolve(f.dest))))
+        throw Error('A shared model file is downloading. Let it finish before installing this model.');
     }
     let release;
     this.#pending.set(id, new Promise((resolve) => { release = resolve; }));
     try {
-      return await this.#download(id, cap);
+      if (auth) localLtxPermissions.delete(localAccess);
+      return await this.#download(id, cap, auth);
     } finally {
       this.#pending.delete(id);
       release();
     }
   }
 
-  async #download(id, cap) {
+  async #download(id, cap, auth = null) {
     this.cancelled.delete(id);
     /* This run's token: a run that was cancelled and is still unwinding must
      * not write "failed" over a new run of the same row started meanwhile. */
@@ -3969,7 +4146,7 @@ export class ModelManager extends EventEmitter {
         // Re-read after each completed download; shared files may have landed
         // while this request waited for another capability's download.
         if (await filePresent(f, await catalogShelf())) continue;
-        await this.#one(id, f, () => doneBytes, (n) => { doneBytes = n; });
+        await this.#one(id, f, () => doneBytes, (n) => { doneBytes = n; }, auth);
         doneBytes += f.bytes;
       }
       this.progress.delete(id);
@@ -3977,6 +4154,7 @@ export class ModelManager extends EventEmitter {
       this.emit("ready", id);
       return { ok: true };
     } catch (err) {
+      err = localLtxError(err, auth);
       /* Cancelled: nothing failed. cancel() already cleared the row. */
       if (!mine()) return { cancelled: true };
       if (this.cancelled.has(id)) {
@@ -3992,7 +4170,7 @@ export class ModelManager extends EventEmitter {
     }
   }
 
-  async #one(id, f, getBase, _setBase) {
+  async #one(id, f, getBase, _setBase, auth = null) {
     if (fp4Blocked(f)) {
       throw new Error(`${path.basename(f.dest)} is an fp4 build, which needs an NVIDIA card. `
         + "It was not downloaded. Use another build of it from the Models screen.");
@@ -4013,16 +4191,25 @@ export class ModelManager extends EventEmitter {
       let stalled = false, timer = null;
       const arm = () => { clearTimeout(timer); timer = setTimeout(() => { stalled = true; ctl.abort(); }, DOWNLOAD_STALL_MS); };
       const name = path.basename(f.dest);
-      let out = null;
+      let out = null, writerError = null;
       try {
         arm();
-        const res = await fetch(f.url, { signal: ctl.signal, ...(from ? { headers: { Range: `bytes=${from}-` } } : {}) });
+        const init = { signal: ctl.signal, headers: { ...(from ? { Range: `bytes=${from}-` } : {}),
+          ...(auth ? { Authorization: `Bearer ${auth.token}` } : {}) } };
+        let res;
+        try { res = auth ? await fetchModelFile(f.url, init) : await fetch(f.url, init); }
+        catch (error) { if (auth && !ctl.signal.aborted) throw Error('The Hugging Face download connection failed. Try again to resume.'); throw error; }
+        if (auth && [401,403].includes(res.status)) throw Error('Hugging Face access was denied. Check the connected key and approve access on the model page.');
         if (!res.ok && res.status !== 206) throw new Error(`${name}: HTTP ${res.status}`);
         // A server that ignores Range answers 200 with the whole file; restarting is
         // then the only correct thing to do, rather than appending to a partial.
         if (from && res.status !== 206) from = 0;
 
         out = createWriteStream(part, { flags: from ? "a" : "w" });
+        // A very early Cancel can destroy a writer before its pending open or
+        // first write completes. Always own its error event; a disk error also
+        // aborts the network rather than continuing to buffer into a dead file.
+        out.on('error', error => { writerError = error; ctl.abort(); });
         let received = from;
         const base = getBase();
         for await (const chunk of res.body) {
@@ -4045,6 +4232,7 @@ export class ModelManager extends EventEmitter {
         out = null;
       } catch (err) {
         if (this.cancelled.has(id)) throw new Error("cancelled");
+        if (writerError) throw writerError;
         if (stalled) {
           throw new Error(`${name}: the server sent nothing for ${DOWNLOAD_STALL_MS / 1000} s, so the download was stopped. `
             + "What arrived is kept: press Download again to continue from there.");

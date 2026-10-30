@@ -184,6 +184,9 @@ ok("removing the key takes it out of the menus and the chat falls back to local"
     fetch: async (url, init) => {
       const body = JSON.parse(init.body);
       sent.push(body);
+      if (body.model === "no-stream" && body.stream) {
+        return new Response(JSON.stringify({ error: { message: "Streaming is not supported by this model" } }), { status: 400 });
+      }
       if (String(url).includes("anthropic")) {
         if (body.thinking && body.model === "claude-nothink") {
           return new Response(JSON.stringify({ type: "error", error: { message: "thinking is not supported on this model" } }), { status: 400 });
@@ -210,6 +213,15 @@ ok("removing the key takes it out of the menus and the chat falls back to local"
     },
   });
   const seen = [];
+  const plainSeen = [];
+  const plainChoice = { provider: "custom", model: "no-stream" };
+  const firstPlain = await scloud.complete(plainChoice, "hi", { onDelta: (d) => plainSeen.push(d) });
+  ok("a model that rejects streaming still answers and delivers its completed text", firstPlain === "all at once"
+    && sent.length === 2 && sent[0].stream === true && !("stream" in sent[1])
+    && plainSeen.length === 1 && plainSeen[0].text === firstPlain, JSON.stringify({ sent, plainSeen }));
+  sent.length = 0;
+  await scloud.complete(plainChoice, "again", { onDelta: () => {} });
+  ok("a model's streaming refusal is remembered for its next turn", sent.length === 1 && !("stream" in sent[0]));
   const watch = (d) => seen.push(d);
   const a = await scloud.complete({ provider: "anthropic", model: "claude-s" }, "eq", { maxTokens: 16000, onDelta: watch, think: true });
   ok("a streamed Claude reply comes back whole, its thinking and writing shown on the way",

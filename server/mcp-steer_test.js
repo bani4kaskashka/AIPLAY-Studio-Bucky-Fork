@@ -262,9 +262,9 @@ console.log("\n§1  the simple way on the Video screen");
   ok("the 4-step speed-up alone: the reference path's 8-step band is NOT counted, so Keep my character at 8 is refused, offering the 8-step file",
     same(fourOnly.refBuilds, { four: true, eight: false }) && fourOnly.keep8?.row === "videoH3Turbo8" && fourOnly.keep4 === null,
     JSON.stringify(fourOnly));
-  ok("H3 + Video references: the ref2v 4-step is not an 8-step build, Keep runs its own 4, and 8 is refused without offering a row that changes nothing",
+  ok("H3 + older Video references: Keep runs its own 4, and 8 offers the Video references update",
     same(h3Refs.refBuilds, { four: true, eight: false }) && h3Refs.refSteps === 4 && h3Refs.loadedRef === 4 && h3Refs.keep4 === null
-    && h3Refs.keep8?.row === null && /needs the 8-step reference build, which is not on this PC/.test(h3Refs.keep8?.error || "")
+    && h3Refs.keep8?.row === "videoRefs" && /needs the 8-step reference build, which is not on this PC/.test(h3Refs.keep8?.error || "")
     && h3Refs.steps === 8, JSON.stringify(h3Refs));
   ok("...where both reference builds are on disk, both bands count", same(rig.refBuilds, { four: true, eight: true }) && rig.keep8 === null, JSON.stringify(rig.refBuilds));
   ok("...and the screen's chips read those numbers as they are",
@@ -453,9 +453,11 @@ console.log("\n§2  make_song forwards every dial the door takes");
 console.log("\n§3  the two tools that were missing");
 {
   const sie = tool("set_image_engine"), dm = tool("download_model");
-  ok("set_image_engine exists and offers every image engine, krea2 included, and \"auto\" (forget the choice)",
-    JSON.stringify(sie?.inputSchema?.properties?.engine?.enum) === JSON.stringify(["auto", "qwen-image-2.1", "flux2", "zimage", "zimage-base", "anima", "ideogram4", "krea2", "checkpoint"]));
+  ok("set_image_engine exists and offers every image engine, MOSS and krea2 included, and \"auto\" (forget the choice)",
+    JSON.stringify(sie?.inputSchema?.properties?.engine?.enum) === JSON.stringify(["auto", "qwen-image-2.1", "moss-image", "flux2", "zimage", "zimage-base", "anima", "ideogram4", "krea2", "checkpoint"]));
   ok("...posting the Images page's own door", /\{ engine: a\.engine/.test(String(sie?.run || "")) && /api\("POST", "\/api\/artconfig", body\)/.test(String(sie?.run || "")));
+  ok("...and describing MOSS as experimental text only with no references or editing",
+    /moss-image: experimental.*text only; no references or editing/.test(sie?.description || "") && /moss_image_status/.test(sie?.description || ""));
   ok("...and naming the licences that matter", /NON-COMMERCIAL/.test(sie?.description || "") && /USD 1M/.test(sie?.description || ""));
   ok("download_model exists and posts the catalogue door", /api\("POST", "\/api\/models", \{\s+action: "download", id: String\(a\.id \|\| ""\),/.test(String(dm?.run || "")));
   ok("...sending the territory acknowledgement only when it is true", /\.\.\.\(a\.accept_region === true \? \{ acceptRegion: true \} : \{\}\),/.test(String(dm?.run || "")));

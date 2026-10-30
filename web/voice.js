@@ -9,7 +9,7 @@
 
 const MAX_MS = 2 * 60_000;
 const TYPES = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
-const WORDS = { idle: "Record your request", rec: "Stop recording", busy: "Writing down what you said" };
+const WORDS = { idle: "Record your request", opening: "Opening microphone", rec: "Stop recording", busy: "Writing down what you said" };
 const IDLE_TITLE = "Say it instead of typing. Whisper writes it into the box.";
 
 /**
@@ -19,40 +19,70 @@ const IDLE_TITLE = "Say it instead of typing. Whisper writes it into the box.";
  */
 export function wireMic(button, { box, say, after = () => {} }) {
   let rec = null;               // { recorder, stream, chunks, stopTimer, tick }
+  let state = "idle";
 
-  function paint(state) {
+  function paint(next) {
+    state = next;
     button.dataset.state = state;
     button.setAttribute("aria-pressed", state === "rec" ? "true" : "false");
-    button.disabled = state === "busy";
+    button.disabled = state === "busy" || state === "opening";
     const label = button.querySelector(".sr-only");
     if (label) label.textContent = WORDS[state];
     button.title = state === "idle" ? IDLE_TITLE : WORDS[state];
   }
 
+  const clearTimers = (mine) => { clearTimeout(mine.stopTimer); clearInterval(mine.tick); };
+  const release = (stream) => { for (const track of stream?.getTracks() || []) { try { track.stop(); } catch { /* release the other tracks too */ } } };
+  function failed(mine, stream, err) {
+    if (mine) {
+      mine.finished = true;
+      clearTimers(mine);
+      if (rec === mine) rec = null;
+      try { if (mine.recorder.state !== "inactive") mine.recorder.stop(); } catch { /* already failed */ }
+    }
+    release(stream);
+    paint("idle");
+    say(`The microphone could not record: ${err?.message || err}`, true);
+  }
+
   async function start() {
+    if (state !== "idle") return;
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) { say("This browser cannot record here.", true); return; }
-    let stream;
-    try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
-    catch (err) { say(`The microphone could not be opened: ${err.message || err}`, true); return; }
-    const type = TYPES.find((t) => MediaRecorder.isTypeSupported(t)) || "";
-    const recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
-    const started = Date.now();
-    const mine = { recorder, stream, chunks: [] };
-    rec = mine;
-    recorder.ondataavailable = (e) => { if (e.data?.size) mine.chunks.push(e.data); };
-    recorder.onstop = () => send(new Blob(mine.chunks, { type: recorder.mimeType || type || "audio/webm" }));
-    recorder.start();
-    mine.stopTimer = setTimeout(stop, MAX_MS);
-    const tick = () => say(`Listening… ${Math.round((Date.now() - started) / 1000)} s. Press the mic again when you are done.`);
-    tick(); mine.tick = setInterval(tick, 1000);
-    paint("rec");
+    paint("opening");
+    let stream, mine;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      const type = TYPES.find((t) => MediaRecorder.isTypeSupported(t)) || "";
+      const recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+      const started = Date.now();
+      mine = { recorder, stream, chunks: [], stopping: false, finished: false };
+      rec = mine;
+      recorder.ondataavailable = (e) => { if (e.data?.size) mine.chunks.push(e.data); };
+      recorder.onstop = () => {
+        if (mine.finished) return;
+        mine.finished = true;
+        clearTimers(mine); release(stream);
+        if (rec === mine) rec = null;
+        send(new Blob(mine.chunks, { type: recorder.mimeType || type || "audio/webm" }));
+      };
+      recorder.onerror = (e) => { if (!mine.finished) failed(mine, stream, e.error || new Error("Recording stopped.")); };
+      recorder.start();
+      mine.stopTimer = setTimeout(() => { if (rec === mine) stop(); }, MAX_MS);
+      const tick = () => say(`Listening… ${Math.round((Date.now() - started) / 1000)} s. Press the mic again when you are done.`);
+      tick(); mine.tick = setInterval(tick, 1000);
+      paint("rec");
+    } catch (err) { failed(mine, stream, err); }
   }
 
   function stop() {
-    if (!rec) return;
-    clearTimeout(rec.stopTimer); clearInterval(rec.tick);
-    rec.stream.getTracks().forEach((t) => t.stop());
-    if (rec.recorder.state !== "inactive") rec.recorder.stop();
+    const mine = rec;
+    if (!mine || mine.stopping || mine.finished) return;
+    mine.stopping = true;
+    paint("busy");
+    clearTimers(mine);
+    try { if (mine.recorder.state !== "inactive") mine.recorder.stop(); }
+    catch (err) { failed(mine, mine.stream, err); }
+    finally { release(mine.stream); }
   }
 
   async function send(blob) {
@@ -86,5 +116,8 @@ export function wireMic(button, { box, say, after = () => {} }) {
   }
 
   paint("idle");
-  button.addEventListener("click", () => (rec ? stop() : start()));
+  button.addEventListener("click", () => {
+    if (state === "opening" || state === "busy") return;
+    return rec ? stop() : start();
+  });
 }

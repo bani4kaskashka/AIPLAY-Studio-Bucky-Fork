@@ -43,6 +43,7 @@
 import { createHash } from "node:crypto";
 import { CATALOG, MODEL_TO_CAPABILITY } from "../models.js";
 import { classify } from "../customWorkflows.js";
+import { isH3ControlModelInput } from "../h3-control-models.js";
 
 /** A ComfyUI API-format link: ["<node id>", <output slot>]. */
 export const isLink = (v) =>
@@ -106,7 +107,7 @@ const SAMPLER_KNOBS = [
 
 /** Model-bearing inputs. `sampler_name` deliberately does not match — it ends
  *  `r_name`, and none of the alternatives below completes that word. */
-const MODEL_INPUT_RE = /(ckpt|unet|clip|vae|lora|model|style_model|control_net)_name$/;
+const MODEL_INPUT_RE = /(ckpt|unet|clip|vae|lora|model|style_model|control_net)_name(?:[12])?$/;
 
 /** A loader that reads a file the USER staged (a reference image, a source
  *  clip). `(^|_)Load[A-Z]` so `VHS_LoadVideo` counts and
@@ -323,7 +324,7 @@ export function buildRecord(graph, ctx = {}) {
       if (k === "filename_prefix" && typeof v === "string") outputPrefixes.push(v);
       if ((k === "fps" || k === "frame_rate") && typeof v === "number") rates.push(v);
 
-      if (typeof v === "string" && (MODEL_INPUT_RE.test(k) || (cls === "AiplayH3ConditioningBridge" && k === "adapter"))) {
+      if (typeof v === "string" && (MODEL_INPUT_RE.test(k) || (["ModelPatchLoader", "AiplayH3FullControlPatchLoader"].includes(cls) && k === "name") || isH3ControlModelInput(cls, k) || (cls === "AiplayH3ConditioningBridge" && k === "adapter"))) {
         const entry = { node: id, class: cls, input: k, file: v, bytes: null, mtimeMs: null, sha256: null };
         if (k === "lora_name") {
           loras.push({

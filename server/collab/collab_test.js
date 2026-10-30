@@ -578,12 +578,14 @@ console.log("\n§7  the door itself, evaluated — because every pin above this 
   const h3Real = realCfg.video.engines.h3;
   const F4 = Object.keys(h3Real.turboShiftByLora).find((n) => /fl2v.*4step/.test(n));
   const R4 = Object.keys(h3Real.turboShiftByLora).find((n) => /ref2v.*4step/.test(n));
-  /* Every turbo slot resolved to a 4-step file, which is what pick() does on a
-   * PC whose loras folder holds only what the Models screen fetched. */
+  /* Pin the shared file-fallback rule (AMD, Intel and CPU), independent of
+   * the host's NVIDIA per-path disk readings. lending_test.js separately
+   * checks the per-path refusal before an order is accepted. */
   const FOUR_STEP_ONLY = {
     cfg: { ...realCfg, modelsDir: "/nowhere", modelsAlso: [],
       video: { ...realCfg.video, engines: { ...realCfg.video.engines,
-        h3: { ...h3Real, turboLora: F4, turboLora4: F4, turboLora3: F4, refTurboLora: R4, refTurboLora4: R4 } } } },
+        h3: { ...h3Real, plainBuilds: null, refBuilds: null,
+          turboLora: F4, turboLora4: F4, turboLora3: F4, refTurboLora: R4, refTurboLora4: R4 } } } },
     onDisk: (n) => /4step/.test(String(n)),
   };
   const lendingDoor = { ...lendingM,
@@ -1054,17 +1056,17 @@ console.log("\n§7  the door itself, evaluated — because every pin above this 
   ok("...and the sentence a person reads says what will be RENDERED, not only how big",
     /It will render:/.test(unread.body.describes || ""), unread.body.describes);
   /* ⚠ PIN 9 — WHAT A YES WOULD LOAD, BEFORE THE YES. An 8-step order on a PC
-   * holding only the 4-step speed-up files (what the Models screen installs)
+   * holding only the older 4-step speed-up files
    * runs a 4-step file at 8 steps. The card says so, naming the file. */
   ok("the card names the speed-up file this PC lacks for the order's step count",
     /8 steps/.test(unread.body.speedUp || "") && /turbo_8step[^ ]*\.safetensors/.test(unread.body.speedUp || ""),
     unread.body.speedUp);
-  /* ⚠ AND IT OFFERS ONLY WHAT THIS BUILD CAN DO. The Models screen fetches no
-   * 8-step file, so "add it before you approve" was advice a newcomer could not
-   * follow. The card says the count overruns the file that loads, that the
-   * Models screen does not offer the matching one, and the two real choices. */
-  ok("...says the order overruns the 4-step file, that the Models screen does not offer the 8-step one, and what can be done",
-    /8 steps overruns it/.test(unread.body.speedUp || "") && /Models screen does not offer it/.test(unread.body.speedUp || "")
+  /* The Video references row now downloads V1.1. The warning still names the
+   * overrun and the choices, and offers the actual matching download. */
+  ok("...says the order overruns the 4-step file and offers the matching V1.1 download or a four-step order",
+    /8 steps overruns it/.test(unread.body.speedUp || "") && /Models screen offers it/.test(unread.body.speedUp || "")
+    && /ref2v_turbo_8step_v1\.1_768p_comfyui_bf16\.safetensors/.test(unread.body.speedUp || "")
+    && /Video references/.test(unread.body.speedUp || "") && /used as soon as the download lands/.test(unread.body.speedUp || "")
     && /render it as it is/.test(unread.body.speedUp || "") && /ask them to order 4 steps/.test(unread.body.speedUp || "")
     && !/add it before you approve/.test(unread.body.speedUp || ""),
     unread.body.speedUp);

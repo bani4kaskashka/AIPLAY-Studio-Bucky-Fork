@@ -7,7 +7,8 @@
  *   - A page is one self-contained HTML file. Every save is a new version on
  *     disk, so a change the model gets wrong is one step back.
  *   - Stored in <app data>/pages/<id>/: page.json (name, dates, versions) and
- *     v<n>.html. Nothing leaves this PC; export is a file the person saves.
+ *     v<n>.html. A selected cloud writer receives the page, request and errors
+ *     during generation; export is a file the person saves.
  *   - The page RUNS in the browser inside a sandboxed frame (web/pages.js):
  *     no access to Studio's routes, files or keys, and no internet. It gets a
  *     few read-only facts (songs, pictures) through a message bridge.
@@ -19,7 +20,7 @@
  *   POST /api/pages {action: create|save|rename|delete|generate|import, ...}
  */
 import { readFile, writeFile, mkdir, readdir, rm } from "node:fs/promises";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import path from "node:path";
 
 const MAX_HTML = 2 * 1024 * 1024;          // one page, 2 MB of HTML
@@ -83,11 +84,15 @@ export const SYSTEM_RULES = [
   "",
   "THE SANDBOX: hard limits, code that ignores them fails",
   "- The page runs in a sandboxed iframe with an opaque origin and this Content-Security-Policy:",
-  "  default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src <studio> data: blob:;",
-  "  media-src <studio> data: blob:; font-src data:; connect-src 'none'; form-action 'none'",
+  "  default-src 'none'; script-src <Studio bootstrap hash> 'unsafe-eval'; style-src 'unsafe-inline';",
+  "  img-src <studio> data: blob:; media-src <studio> data: blob:; font-src data:; connect-src 'none';",
+  "  frame-src 'none'; worker-src 'none'; object-src 'none'; form-action 'none'",
   "- So there is NO: external script, stylesheet, font or CDN; ES module import; fetch, XMLHttpRequest, WebSocket or",
   "  EventSource; localStorage, sessionStorage, indexedDB or cookies (they THROW a SecurityError); alert, confirm or",
   "  prompt; window.open or popups; form submission; file downloads; navigation away. Use plain inline <script> tags.",
+  "- Studio runs the page's classic inline scripts together after parsing, before DOMContentLoaded. JSON/data scripts",
+  "  stay inert. Inline event handlers work, including handlers in later innerHTML. Do not use parser-time document.write,",
+  "  ES modules, frames, workers or dynamically inserted <script> tags; use functions and addEventListener instead.",
   "- Audio may only start after a click inside the page: create or resume the AudioContext inside a click handler.",
   "",
   "THE STUDIO BRIDGE: window.studio exists before your scripts run. It is the only way to reach Studio.",
@@ -191,20 +196,27 @@ const cleanName = (v) => String(v || "").replace(/[\u0000-\u001f<>\u200e\u200f\u
  *   - no network: connect-src, form-action and default-src 'none'; pictures
  *     and sound only from Studio itself and from data:/blob: URLs;
  *   - frame-ancestors 'self': no other website can frame it.
- * WebRTC is outside every CSP directive Edge honours (measured: `webrtc
- * 'block'` is ignored), so the bridge, which is guaranteed to run first
- * because it is written ahead of the page's own markup, removes it. A frame
- * inside the page cannot hand it back: under this policy it is cross-origin
- * (measured: SecurityError). */
+ * WebRTC is not covered by connect-src in current browsers. Only the exact
+ * trusted bootstrap may execute as a script element. It removes the WebRTC
+ * constructors before running the page's scripts in that sealed realm.
+ * about:blank/srcdoc children can exist even with frame-src 'none', but their
+ * inherited script policy blocks arbitrary scripts and event attributes.
+ * Copying the allowed bootstrap into one seals that realm before any page
+ * code runs there too. No secret nonce or one-window API deletion is relied on.
+ * See CSP 3 sections 6.1.10 and 7.8, and HTML's sandboxed-origin flag. */
+const ownOrigin = (host) => /^[\w.-]+(:\d+)?$|^\[[0-9a-f:]+\](:\d+)?$/i.test(String(host || "")) ? `http://${host}` : "";
 export function frameCsp(host) {
-  const own = /^[\w.-]+(:\d+)?$|^\[[0-9a-f:]+\](:\d+)?$/i.test(String(host || "")) ? ` http://${host}` : "";
-  return `sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; `
+  const own = ownOrigin(host) ? ` ${ownOrigin(host)}` : "";
+  return `sandbox allow-scripts; default-src 'none'; script-src 'sha256-${BOOTSTRAP_HASH}' 'unsafe-eval'; script-src-attr 'none'; style-src 'unsafe-inline'; `
     + `img-src 'self'${own} data: blob:; media-src 'self'${own} data: blob:; font-src data:; `
-    + `connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'; webrtc 'block'`;
+    + `connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; `
+    + `form-action 'none'; base-uri 'none'; frame-ancestors 'self'; webrtc 'block'`;
 }
 export const FRAME_HEADERS = {
   "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store",
   "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+  "X-DNS-Prefetch-Control": "off",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=(), display-capture=(), payment=(), usb=(), serial=()",
 };
 
 /* The bridge, as it runs INSIDE the frame. Every call is a message to the
@@ -214,7 +226,7 @@ export const FRAME_HEADERS = {
  * Studio's code posts them; the wrapper in between runs no script. The bridge
  * says hello until Studio answers, so nothing it sends early is lost. */
 export const BRIDGE = `(()=>{
-for(const k of ["RTCPeerConnection","webkitRTCPeerConnection","RTCDataChannel"]){try{delete window[k];Object.defineProperty(window,k,{value:undefined,writable:false,configurable:false});}catch{}}
+for(const k of ["RTCPeerConnection","webkitRTCPeerConnection","mozRTCPeerConnection","RTCDataChannel"]){try{delete window[k];Object.defineProperty(window,k,{value:undefined,writable:false,configurable:false});}catch{}if(window[k]!==undefined)throw new Error("This browser cannot isolate My pages.");}
 let n=0,ready=false;const w=new Map(),q=[];
 const raw=(m)=>parent.postMessage(m,"*");const send=(m)=>ready?raw(m):q.push(m);
 const hi=()=>raw({aiplayBridge:1,op:"hello"});hi();const hello=setInterval(hi,100);
@@ -240,18 +252,52 @@ const ce=console.error.bind(console);console.error=(...a)=>{say("console.error: 
  * and no CSP of its own stops that, so `location = "https://x/?" + lyrics`
  * would carry data out (measured: five ways, all went through). The browser
  * checks a frame's navigations against its PARENT's frame-src, so the page's
- * parent is this wrapper, whose policy allows frames from Studio only
- * (measured: the same five, none went through). It runs no script; the
+ * parent is this wrapper, whose policy allows only this page's frame URL.
+ * Other Studio HTML must not become a fresh realm with a looser script policy.
+ * It runs no script; the
  * screen (web/pages.js) listens on it for the page's bridge messages. */
-export const SHELL_CSP = "default-src 'none'; style-src 'unsafe-inline'; frame-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'";
+export const SHELL_CSP = "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'";
+export function shellCsp(host, id) {
+  const own = ownOrigin(host);
+  return `${SHELL_CSP}; frame-src ${own && ID_RE.test(id) ? `${own}/api/pages/${id}/frame` : "'none'"}`;
+}
 export const shellHtml = (id, version) => `<!doctype html><html><head><meta charset="utf-8"><style>`
   + `html,body{margin:0;height:100%;background:#0d1017}iframe{display:block;border:0;width:100%;height:100%}</style></head>`
   + `<body><iframe id="f" title="Your page" sandbox="allow-scripts" src="/api/pages/${encodeURIComponent(id)}/frame?v=${Number(version)}"></iframe></body></html>`;
 
-/** The frame document: Studio's head and bridge FIRST, then the page as it is.
- *  The page's own doctype, <html> and <head> after ours are ignored by the
- *  HTML parser; whatever it puts first (a comment, a script) runs after the bridge. */
-export const frameHtml = (html) => `<!doctype html><html><head><meta charset="utf-8"><script>${BRIDGE}</script>\n${html}`;
+/* No caller-controlled text goes in this script or its CSP hash. The browser
+ * parses the page normally, with its own script elements/attributes blocked.
+ * At interactive (before native DOMContentLoaded), run classic inline scripts
+ * together in the already sealed realm. Keeping their lexical environment in
+ * the handler factory lets an onclick use a top-level let/const as usual.
+ * Parser-time document.write, modules and dynamically injected script elements
+ * are deliberately unsupported. Data/JSON scripts stay in the DOM, inert. */
+export const FRAME_BOOTSTRAP = `(()=>{
+if(window.__aiplayPageBoot)return;Object.defineProperty(window,"__aiplayPageBoot",{value:true});
+${BRIDGE}
+const boot=document.currentScript;
+const run=()=>{
+  const classic=(s)=>!s.src&&!s.noModule&&(!s.type||/^(?:text|application)\\/(?:java|ecma)script(?:\\s*;|$)/i.test(s.type));
+  const scripts=Array.from(document.scripts).filter(s=>s!==boot&&classic(s)).map(s=>s.textContent);
+  let handler;try{handler=(0,eval)(scripts.join("\\n;\\n")+"\\n;((source)=>eval('(function(event){\\\\n'+source+'\\\\n})'))");}catch(e){console.error(e);}
+  if(typeof handler!=="function")return;
+  const bind=(root)=>{
+    const nodes=root.nodeType===1?[root,...root.querySelectorAll("*")]:Array.from(root.querySelectorAll?.("*")||[]);
+    for(const node of nodes)for(const attr of Array.from(node.attributes||[]))if(/^on[a-z]+$/i.test(attr.name)){
+      const key=attr.name.toLowerCase(),source=attr.value;node.removeAttribute(attr.name);
+      try{node[key]=handler(source);}catch(e){console.error(e);}
+    }
+  };
+  bind(document);
+  new MutationObserver(records=>{for(const record of records){if(record.type==="attributes")bind(record.target);else for(const node of record.addedNodes)bind(node);}}).observe(document,{childList:true,subtree:true,attributes:true});
+};
+if(document.readyState==="loading"){const ready=()=>{if(document.readyState!=="loading"){document.removeEventListener("readystatechange",ready);run();}};document.addEventListener("readystatechange",ready);}else run();
+})();`;
+const BOOTSTRAP_HASH = createHash("sha256").update(FRAME_BOOTSTRAP).digest("base64");
+
+/** The trusted bootstrap precedes all generated markup. Its only allowed
+ * script hash is inherited by local-scheme descendants as well. */
+export const frameHtml = (html) => `<!doctype html><html><head><meta charset="utf-8"><script>${FRAME_BOOTSTRAP}</script><style>:root{color-scheme:dark}</style>\n${html}`;
 
 /** "Qwen3 4B - writes lyrics and prompts" as a page writer: the size, and a
  *  warning under 8B, where pages come out with more mistakes. */
@@ -271,6 +317,17 @@ export function createPages({ dir, cloud, local = null }) {
     catch (e) { if (e.status) throw e; throw Object.assign(new Error("No such page."), { status: 404 }); }
   };
   const writeMeta = (meta) => writeFile(path.join(pageDir(meta.id), "page.json"), JSON.stringify(meta, null, 2), "utf8");
+  // Allocate versions and update metadata together. The model runs outside this
+  // queue; only its final save waits for another mutation of the same page.
+  const mutations = new Map();
+  function mutate(id, action) {
+    pageDir(id);
+    const result = (mutations.get(id) || Promise.resolve()).then(action);
+    const settled = result.then(() => {}, () => {});
+    mutations.set(id, settled);
+    settled.then(() => { if (mutations.get(id) === settled) mutations.delete(id); });
+    return result;
+  }
 
   async function addVersion(meta, html, { note = "", source = "hand" } = {}) {
     if (typeof html !== "string" || !html.trim()) throw new Error("The page is empty.");
@@ -325,11 +382,13 @@ export function createPages({ dir, cloud, local = null }) {
   async function dataSet(id, key, value) {
     const k = String(key || "");
     if (!k || k.length > 100) throw new Error("A saved-data key is 1 to 100 characters.");
-    const d = await readData(id);
-    if (value === null || value === undefined) delete d[k]; else d[k] = value;
-    const text = JSON.stringify(d);
-    if (text.length > MAX_DATA) throw new Error("This page's saved data would pass 1 MB.");
-    await writeFile(dataFile(id), text, "utf8");
+    return mutate(id, async () => {
+      const d = await readData(id);
+      if (value === null || value === undefined) delete d[k]; else d[k] = value;
+      const text = JSON.stringify(d);
+      if (text.length > MAX_DATA) throw new Error("This page's saved data would pass 1 MB.");
+      await writeFile(dataFile(id), text, "utf8");
+    });
   }
 
   async function generate({ id, model, request, errors = [], onDelta = null }) {
@@ -362,12 +421,14 @@ export function createPages({ dir, cloud, local = null }) {
     }
     const html = extractHtml(text);
     if (!html) throw new Error("The model answered without a page. Try again, or describe the change differently.");
-    const meta = await readMeta(id);
-    /* A page still on the default name takes the name the model gave it. */
-    const title = titleOf(html);
-    if (meta.name === DEFAULT_NAME && title && title !== DEFAULT_NAME) meta.name = title;
-    const n = await addVersion(meta, html, { source: `ai:${choice.provider}/${choice.model}`, note: ask.slice(0, 200) });
-    return { version: n, html, name: meta.name };
+    return mutate(id, async () => {
+      const meta = await readMeta(id);
+      /* A page still on the default name takes the name the model gave it. */
+      const title = titleOf(html);
+      if (meta.name === DEFAULT_NAME && title && title !== DEFAULT_NAME) meta.name = title;
+      const n = await addVersion(meta, html, { source: `ai:${choice.provider}/${choice.model}`, note: ask.slice(0, 200) });
+      return { version: n, html, name: meta.name };
+    });
   }
 
   async function handle(req, res, url, { json, readBody, sameOriginLocalJson }) {
@@ -394,9 +455,16 @@ export function createPages({ dir, cloud, local = null }) {
             /* The wrapper Studio's screen loads: no script, and frame-src 'self',
              * which the browser checks on EVERY navigation of the page inside
              * it, so the page cannot carry data off by navigating itself. */
-            res.writeHead(200, { ...FRAME_HEADERS, "Content-Security-Policy": SHELL_CSP });
+            res.writeHead(200, { ...FRAME_HEADERS, "Content-Security-Policy": shellCsp(req.headers.host, page.id) });
             res.end(shellHtml(page.id, page.version));
           } else {
+            /* A top-level visit needs the wrapper too: only its parent policy
+             * can constrain the generated document's own navigations. Missing
+             * Fetch Metadata also takes this safe entry point. */
+            if (!["iframe", "frame"].includes(req.headers["sec-fetch-dest"])) {
+              res.writeHead(302, { ...FRAME_HEADERS, Location: `/api/pages/${page.id}/shell?v=${page.version}` });
+              res.end(); return true;
+            }
             /* The page itself: the policy is a response header its markup cannot move. */
             res.writeHead(200, { ...FRAME_HEADERS, "Content-Security-Policy": frameCsp(req.headers.host) });
             res.end(frameHtml(page.html));
@@ -412,18 +480,20 @@ export function createPages({ dir, cloud, local = null }) {
       switch (b.action) {
         case "create": json(res, 200, await create({ name: b.name })); return true;
         case "save": {
-          const meta = await readMeta(b.id);
-          const n = await addVersion(meta, b.html, { note: b.note || "edited by hand" });
+          const n = await mutate(b.id, async () => addVersion(await readMeta(b.id), b.html, { note: b.note || "edited by hand" }));
           json(res, 200, { version: n }); return true;
         }
         case "rename": {
-          const meta = await readMeta(b.id);
-          meta.name = cleanName(b.name) || meta.name;
-          await writeMeta(meta);
-          json(res, 200, { name: meta.name }); return true;
+          const name = await mutate(b.id, async () => {
+            const meta = await readMeta(b.id);
+            meta.name = cleanName(b.name) || meta.name;
+            await writeMeta(meta);
+            return meta.name;
+          });
+          json(res, 200, { name }); return true;
         }
         case "delete":
-          await rm(pageDir(b.id), { recursive: true, force: true });
+          await mutate(b.id, () => rm(pageDir(b.id), { recursive: true, force: true }));
           json(res, 200, { ok: true }); return true;
         case "generate": {
           if (!b.stream) { json(res, 200, await generate(b)); return true; }

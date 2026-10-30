@@ -11,6 +11,65 @@
 # declaration there passed every check and was only caught by trying to boot
 # the app by hand. One syntax check closes that hole for the price of nothing.
 node --check server/index.js || exit 1
+node --check scripts/verify-install.mjs || exit 1
+node --check scripts/install-manifest.mjs || exit 1
+node --check installer/linux/bootstrap.mjs || exit 1
+node --check scripts/build-linux-installer.mjs || exit 1
+node --test server/linux-bootstrap_test.js server/linux-installer_test.js || exit 1
+# Native package acceptance is opt-in on disposable Linux runners; the offline
+# transaction/integrity tests above always run on every development platform.
+node --test server/linux-native-installer_test.js || exit 1
+node --check installer/macos/bootstrap.mjs || exit 1
+node --check scripts/build-macos-installer.mjs || exit 1
+node --test server/macos-bootstrap_test.js server/macos-installer_test.js || exit 1
+# Native app/DMG acceptance runs on disposable Intel and Apple Silicon Macs;
+# non-macOS gates skip this lane rather than pretending to certify a bundle.
+node --test server/macos-native-installer_test.js || exit 1
+node --experimental-vm-modules --test server/install-payload_test.js || exit 1
+# Sound output contracts: old cache bytes, transparent unity, PCM headroom.
+node --test server/daw/output-mode_test.js || exit 1
+python server/daw/output_mode_test.py || exit 1
+# Deterministic FM hook voice: pitch, envelopes, spectral behaviour and seam.
+python server/daw/fm_pluck_test.py || exit 1
+# Opt-in sampled playback: alias rejection, legacy bytes/cache and loop time.
+python server/daw/sampler_quality_test.py || exit 1
+node --test server/daw/sampler_quality_routes_test.js || exit 1
+# Project-bound CLI assistants: no inference, login mutation or GPU in fixtures.
+node --check server/daw/assistant.js || exit 1
+node --check server/daw/assistant-providers.js || exit 1
+node --check server/daw/assistant-tools.js || exit 1
+node --check server/daw/assistant-mcp.mjs || exit 1
+node --check web/daw-assistant.js || exit 1
+node --test server/daw/assistant_test.js server/daw/assistant-providers_test.js server/daw/assistant-tools_test.js server/daw/assistant-mcp_test.js server/daw/assistant-ui_test.js || exit 1
+# Held WebMIDI previews: fake audio nodes and requests only, no synth/CLI/GPU.
+node --check web/daw.js || exit 1
+node --test server/daw/audition-ui_test.js || exit 1
+# Native toolbar popups: dismissal, focus, viewport bounds and cleanup.
+node --test server/daw/toolbar_test.js || exit 1
+node --check shared/model-bundles.js || exit 1
+node --check shared/model-profiles.js || exit 1
+node --check server/setup-plan.js || exit 1
+node --check server/local-model-access.js || exit 1
+node --check server/huggingface-login.js || exit 1
+node --check web/local-model-access.js || exit 1
+node --test server/local-model-access_test.js server/local-model-access-ui_test.js server/huggingface-login_test.js || exit 1
+node --check server/music/ace-comfy-input.js || exit 1
+node --check web/ace-music.js || exit 1
+node --test server/ace-music_test.js || exit 1
+node --check server/engine/remote-models.js || exit 1
+node --check server/engine/workflow-evidence.js || exit 1
+node --check web/setup-plan.js || exit 1
+node --check server/engine/model-catalog.js || exit 1
+node --check server/engine/runpod-update.js || exit 1
+node --check server/engine/model-compatibility.js || exit 1
+node --check web/model-browser.js || exit 1
+node --check web/creative-templates.js || exit 1
+node --check web/template-forms.js || exit 1
+node --check server/creative-templates.js || exit 1
+node --check server/model-library.js || exit 1
+node --test server/creative-templates_test.js server/model-library_test.js || exit 1
+node --check web/worker-update.js || exit 1
+node --check worker/model-disk.js || exit 1
 node --check web/full-player-score.js || exit 1
 node --check web/score-follow.js || exit 1
 node --check web/music-workbench.js || exit 1
@@ -39,10 +98,26 @@ node --test server/music/community-tools_test.js server/music/score-follow_test.
 node --check server/mcp-music-workbench.js || exit 1
 node --test server/mcp-music-workbench_test.js || exit 1
 # RunPod transport and its UI: mock HTTP services only; no GPU or paid cloud resources.
+node --check web/cloud-computer.js || exit 1
+node --check server/secrets.js || exit 1
+node --test server/secrets_test.js || exit 1
+node --check server/engine/cloud-computer.js || exit 1
+node --check server/engine/runpod-v2.js || exit 1
+node --check server/engine/runpod-install.js || exit 1
+node --test server/engine/runpod-install_test.js || exit 1
+python worker/automatic-runpod_test.py || exit 1
+node --check worker/cloud-watchdog.js || exit 1
+node --check worker/cloud-storage.js || exit 1
+node --check scripts/package-cloud-worker.mjs || exit 1
+node --test server/engine/cloud-computer_test.js worker/cloud-watchdog_test.js worker/cloud-storage_test.js || exit 1
 node --test server/engine/remote_test.js server/engine/remote_ui_test.js server/engine/runpod-account_test.js server/mcp-runpod_test.js server/engine/remote_guard_test.js || exit 1
+node --test server/secrets_test.js || exit 1
 node --test server/mcp-fastcovers_test.js worker/model-manager_test.js || exit 1
 # The launcher favourite (the star) and the system check's settings merge.
 node --test server/launcher-fav_test.js || exit 1
+node --check server/clip-favorites.js || exit 1
+node --test server/clip-favorites_test.js server/mcp-clip-favorites_test.js || exit 1
+node --test server/video-favorites-ui_test.js || exit 1
 node --check web/runpod-integrated.js || exit 1
 node --check web/runpod.js || exit 1
 node --check worker/runpod-worker.js || exit 1
@@ -199,6 +274,7 @@ node --check web/setup-feature.js || exit 1
 # Accessible Qwen compatibility repair: staged installer, guarded setup, typed
 # assistant confirmation, idle switch, verification and automatic rollback.
 node --test server/install-engine-qwen_test.js server/setup/qwen-engine_test.js server/setup/qwen-activation_test.js server/qwen-repair-integration_test.js server/qwen-lan_test.js || exit 1
+node --test server/comfy-updates_test.js server/setup/comfy-engine_test.js server/setup/comfy-maintenance_test.js server/setup/comfy-activation_test.js || exit 1
 node server/music/yue_test.js || exit 1
 node server/music/yue_fit_test.js || exit 1
 # YuE2 THROUGH COMFYUI TAKES A LORA: the loader is spliced on the MODEL wire
@@ -331,7 +407,9 @@ node --check web/receipt.js || exit 1
 node --check web/fastcovers.js || exit 1
 node --check web/dialog.js || exit 1
 node --test server/fastcover_test.js || exit 1
-node --test server/pages_test.js || exit 1
+node --check web/pages.js || exit 1
+node --check web/voice.js || exit 1
+node --test server/pages_test.js server/pages-ui_test.js server/voice_test.js server/voice-ui_test.js || exit 1
 node server/defaults_test.js || exit 1
 # EXTEND AND REPLACE ON THE PAGE, AND THE GGUF CARD: one panel with a mode
 # switch and two handles that never cross, both offered from the row menu and
@@ -377,12 +455,14 @@ node server/jobs_yue_test.js || exit 1
 # was libx264's silent 23 = 1 Mbit/s), and a clip built without a soundtrack
 # carrying no freeze and no anchor — the assumption the MV gate rests on.
 node server/h3_graph_test.js || exit 1
+node --test server/h3-ref-turbo-v11_test.js || exit 1
 node server/score/abc_test.js || exit 1
 node server/score/store_test.js || exit 1
 node server/score/sheet_test.js || exit 1
 node server/score/routes_test.js || exit 1
 node server/mcp-music-score_test.js || exit 1
 node server/daw/mcp-production_test.js || exit 1
+node --check scripts/setup-gate-python.mjs || exit 1
 # production_export_test also DECODES both paths and compares FRAMES: the
 # editor's region cache as the browser streams it, the bounce, and the same
 # song rendered in one window. Its format checks pass a bounce whose samples
@@ -926,6 +1006,7 @@ node --test server/modelsearch_test.js || exit 1
 # against its own manifest. The fix for a table failure is
 # `node scripts/models_table.mjs`; for examples, `node scripts/examples.mjs`.
 node server/docs_test.js || exit 1
+node --test server/community-guide_test.js || exit 1
 # THE CREDITS ON THE THANKS PAGE. The half of that page that cannot be read
 # live: nothing in a running copy knows who wrote it, and a downloaded ZIP has
 # no git history to ask. So the names are a table in web/credits.js, the markup
@@ -951,6 +1032,7 @@ node --test server/chat/form-tools_test.js || exit 1
 # compares — the gate exists to keep those two numbers from becoming one.
 node --test server/version_test.js || exit 1
 node --test server/installer_test.js || exit 1
+node --test server/windows-bootstrap_test.js || exit 1
 # The Models screen's sections and the "you need a model" window; a card handed
 # cleanly between music and pictures; the library player's "next".
 node --test server/models-screen_test.js || exit 1
@@ -986,6 +1068,7 @@ node --test server/router/router_test.js || exit 1
 # Your own LoRAs on the Video screen reach both video graphs.
 node --test server/video_lora_test.js || exit 1
 node --test server/power_test.js || exit 1
+node --test server/power-startup_test.js || exit 1
 node --test server/ui-kit_test.js || exit 1
 node --check web/ui.js || exit 1
 node --check web/battery.js || exit 1
@@ -1467,6 +1550,14 @@ if [ -n "$ADAPTER_PY" ]; then "$ADAPTER_PY" server/safety_gate_test.py || exit 1
 node scripts/timeline_grade_test.mjs || exit 1
 # Video-to-video: the control video through all four layers that drop what they
 # do not name, and the refusal that offers the model instead of shrugging.
+node --check server/h3-video-control.js || exit 1
+node --check server/h3-control-models.js || exit 1
+node --check server/h3-control-compat.js || exit 1
+node --check web/h3-video-control.js || exit 1
+node --test server/h3-video-control_test.js server/h3-video-control-routes_test.js server/h3-video-control-art_test.js server/h3-video-control-ui_test.js server/h3-video-control-mcp_test.js server/h3-video-control-engine_test.js server/h3-control-deploy_test.js server/h3-video-control-plan_test.js || exit 1
+node --test server/h3-control-compat_test.js || exit 1
+# Bundled depth/pose nodes: CPU fixtures with fake estimators, no weights or GPU.
+python server/h3_control_nodes_test.py || exit 1
 node server/video_v2v_test.js || exit 1
 # The four layer styles added 2026-09-21, and the contract all ten share: paint
 # inside the matte, leave alpha alone. Straight alpha hides a breach of that on
@@ -1523,4 +1614,19 @@ node --check server/refmod-run.js || exit 1
 node --check web/h3-refmods.js || exit 1
 node --test server/h3-refmod_test.js server/refmod-stage_test.js server/refmod-art_test.js || exit 1
 node --test server/collab/reference-packs_test.js || exit 1
+# Optional native MOSS-Image: graph contracts, old-runtime refusals and actual API queue forwarding.
+node --check server/moss-image.js || exit 1
+node --check server/moss-status.js || exit 1
+node --test server/moss-image_test.js server/moss-status_test.js server/moss-api_test.js || exit 1
+# Explicit MOSS accelerator policies, source pins and cache identity.
+node --check server/moss-presets.js || exit 1
+node --check server/moss-spectrum.js || exit 1
+node --check server/moss-adapter.js || exit 1
+node --check server/moss-provenance.js || exit 1
+node --check server/moss-uncensored_test.js || exit 1
+node --test server/moss-presets_test.js server/moss-candidates_test.js server/moss-ui-presets_test.js server/moss-provenance_test.js server/engine/moss-record_test.js || exit 1
+node --test server/moss-uncensored_test.js || exit 1
+# Reproducible optional Spectrum source setup, including exclusive-write and pin fixtures.
+node --check scripts/setup-moss-spectrum.mjs || exit 1
+node --test scripts/setup-moss-spectrum_test.mjs || exit 1
 exit 0

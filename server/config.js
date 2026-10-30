@@ -3,6 +3,7 @@
  * Where a number is an estimate it says so; where a claim was withdrawn, the
  * data that withdrew it stays in the file beside it.
  */
+import { validModelSelection } from '../shared/model-profiles.js';
 import fs from "node:fs";
 import { autoVramFlags, vendorOf } from "./comfyargs.js";
 /* The card tiers' sizes join H3's size list (below the engines): pure data. */
@@ -149,6 +150,13 @@ const videoPick = (engine, field, sub, ...names) => { VIDEO_PICKS.push([engine, 
  * also remembers the list. */
 const H3_LORA_SLOTS = {};
 const loraSlot = (slot, ...names) => { H3_LORA_SLOTS[slot] = names; return pick("loras", ...names); };
+
+/* Known automatic reference distillations, including the fallback. Neither
+ * belongs in a custom stack beside the one the engine loads itself. */
+export const H3_REF_TURBO8_FILES = Object.freeze([
+  "minimax_h3_ref2v_turbo_8step_v1.1_768p_comfyui_bf16.safetensors",
+  "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+]);
 
 /* The TaoMate 3-step files, in pick order (the full conversion, then Kijai's
  * 182 MB rank-19 average). OPTIONAL: nothing asks for them at start. They are
@@ -387,6 +395,8 @@ export const config = {
   musicOnly: MUSIC_ONLY,
   cloudOnly: CLOUD_ONLY,
   remoteOnly: REMOTE_ONLY,
+  cloudSetup: { goal: ['music', 'pictures', 'video', 'all'].includes(saved.cloudSetup?.goal) ? saved.cloudSetup.goal : 'all', plan: null },
+  modelSetup: { local: null },
   comfyAutoStart: !MUSIC_ONLY && !CLOUD_ONLY && !REMOTE_ONLY,
   // Optional external-audio RVQ preprocessing. Explicit opt-in; never download
   // or execute a research workspace just because one exists on this machine.
@@ -475,6 +485,8 @@ export const config = {
   // restarting per job discards the AR-stage cache, and with it the ~40% saving
   // that makes re-rolling a mix faster than realtime.
   comfy: {
+    // A public stable-release lookup after Studio starts; never an automatic install.
+    checkUpdatesOnStart: true,
     /**
      * ⚠ THERE IS NO `port` HERE ANY MORE, AND NO `host` EITHER.
      *
@@ -1480,20 +1492,18 @@ export const config = {
     turboLora: loraSlot("turboLora",
       "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
       "minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors"),
-    /* The ref2va checkpoint has its own turbo distillations — TWO now. The
-     * 8-step v1.0 768p build (lightx2v, 1.96 GB, fetched 2026-09-12) is the one
-     * the community calls "much better at keeping references", and the point
-     * that matters here is plainer: it MATCHES the 8-step schedule the
-     * reference path runs by default. Until this date the 4-step v0.1 was the
-     * only ref2v turbo on disk, so every 8-step reference render ran a 4-step
-     * distillation off its design point — the exact mistake the turboLora4
-     * comment below describes for the fl2v path, made on the other one. Falls
-     * back to v0.1, then to the fl2v loras, for machines without it. */
+    /* V1.1 is the preferred 8-step reference build, by the creator's choice
+     * after the 2026-10-23 Singularity V2 movement pair. That single pair ran
+     * 5.276% faster but changed more of the reference scene; it is not a
+     * general quality or speed ranking (docs/H3_REF_TURBO.md). V1.0 remains
+     * the first fallback, then ref2v 4-step and the older fl2v fallbacks. The
+     * separate 4-step slot below still owns 4-step reference renders. */
     refTurboLora: loraSlot("refTurboLora",
-      "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+      ...H3_REF_TURBO8_FILES,
       "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
       "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
       "minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors"),
+    automaticLoras: H3_REF_TURBO8_FILES,
     /* THE 4-STEP BUILDS, NAMED SEPARATELY so the LoRA can match the schedule.
      *
      * The comment above admits it: "We ran the 4-STEP 768p build at 8 steps,
@@ -1563,6 +1573,8 @@ export const config = {
       "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors": { video: 12, audio: 3 },
       "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors": { video: 12, audio: 3 },
       "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors": { video: 12, audio: 3 },
+      // The controlled V1.1 comparison used 12/3; upstream's newer 6 is FL2V advice.
+      "minimax_h3_ref2v_turbo_8step_v1.1_768p_comfyui_bf16.safetensors": { video: 12, audio: 3 },
     },
 
     /* Strength of the turbo LoRA. 1.0 is the published default for this build;
@@ -1870,7 +1882,9 @@ export const config = {
      * The conv name is repeated last because it is the file the LTX row
      * fetches on every card (setF on 7b241ea): a machine holding neither is
      * told the file it would download, not the template's. */
-    videoVae: videoPick("ltx", "videoVae", "vae", "ltx-2.5-video-vae-conv-bf16.safetensors", "ltx-2.5-video-vae-bf16.safetensors",
+    videoVae: REMOTE_ONLY
+      ? "ltx-2.5-video-vae-conv-bf16.safetensors"
+      : videoPick("ltx", "videoVae", "vae", "ltx-2.5-video-vae-conv-bf16.safetensors", "ltx-2.5-video-vae-bf16.safetensors",
       "ltx-2.5-video-vae-conv-bf16.safetensors"),
     audioVae: "ltx-2.5-audio-vae-bf16.safetensors",
     upscaler: "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
@@ -2159,11 +2173,12 @@ export const config = {
     embedRecord: true,
   },
 
-  /* Battery Safe (server/power.js). On by default: when a generation runs on
-   * battery (a laptop unplugged, a desktop whose UPS took over) it is stopped
-   * after `graceMinutes` unless the person says to keep going. */
+  /* Battery Safe (server/power.js). Windows monitoring needs its own explicit
+   * opt-in: older settings saved batterySafe:true even without a choice, and
+   * must not start the PowerShell reader just by opening Studio. */
   power: {
     batterySafe: true,
+    windowsMonitoring: false,
     graceMinutes: 5,
   },
 
@@ -2176,12 +2191,12 @@ live = config;
 /* H3'S DEFAULT STEP COUNT, AND THE THREE QUALITY CHIPS, FOLLOW THE DISK.
  *
  * An 8-step default is right only where the 8-step turbo files are on disk.
- * The Models screen fetches the fl2v 4-step 768p (its "video" row) and the
- * ref2v 4-step v0.1 ("videoRefs") and no 8-step file, so on a machine set up
- * from that screen `turboLora` and `refTurboLora` fall back to 4-step files.
- * A literal 8 there ran a 4-step distillation at 8 steps on every render that
+ * Earlier Models rows fetched only the 4-step files. A literal 8 there ran a
+ * 4-step distillation at 8 steps on every render that
  * named no step count, the move the turboLora4 comment calls "a different one
- * used wrongly". So each number is what this disk can run matched:
+ * used wrongly". The current reference row includes V1.1 at 8 and v0.1 at 4,
+ * but existing installations may have either, so each number still follows
+ * the file this disk can run matched:
  *
  *   standard  8 where pick() resolved turboLora to an 8-step file (on AMD,
  *             Intel and the CPU, refTurboLora too), else 4, the matched 4-step
@@ -2463,6 +2478,10 @@ config.music.engines["yue2-gguf"] = {
 export { LEVELS, IN_USE_KEYS, startLevel };
 config.ui = startLevel(saved, { unreadable: settingsUnreadable });
 export const PREF_PATHS = [
+  ["comfy", "checkUpdatesOnStart", (v) => typeof v === "boolean"],
+  ['cloudSetup', 'plan', v => v === null || validModelSelection(v)],
+  ['modelSetup', 'local', v => v === null || validModelSelection(v)],
+  ["cloudSetup", "goal", v => ['music', 'pictures', 'video', 'all'].includes(v)],
   ["ui", "level", (v) => LEVELS.includes(v)],
   ["ui", "levelBy", (v) => v === "studio" || v === "you"],
   ["video", "enabled", (v) => typeof v === "boolean"],
@@ -2504,7 +2523,7 @@ export const PREF_PATHS = [
    * MODEL_TO_CAPABILITY — an engine added here without a line in models.js
    * would stamp every render `unknown` and look perfectly fine. Add both, or
    * the hook fails. */
-  ["art", "engine", (v) => ["flux2", "zimage", "zimage-base", "anima", "ideogram4", "krea2", "qwen-image-2.1", "checkpoint"].includes(v)],
+  ["art", "engine", (v) => ["flux2", "zimage", "zimage-base", "anima", "ideogram4", "krea2", "qwen-image-2.1", "moss-image", "checkpoint"].includes(v)],
   ["art", "checkpoint", (v) => v === null || (!!modelName(v) && /\.(safetensors|ckpt)$/i.test(v))],
   /* The Images screen's engine, and a picture with none named (make_image, a
    * music video's stills). The covers' list above, read at call time rather
@@ -2519,6 +2538,7 @@ export const PREF_PATHS = [
   ["provenance", "showBadges", (v) => typeof v === "boolean"],
   ["provenance", "embedRecord", (v) => typeof v === "boolean"],
   ["power", "batterySafe", (v) => typeof v === "boolean"],
+  ["power", "windowsMonitoring", (v) => typeof v === "boolean"],
   ["power", "graceMinutes", (v) => Number.isInteger(v) && v >= 1 && v <= 60],
 ];
 

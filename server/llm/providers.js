@@ -457,9 +457,8 @@ export function createCloud({ config, secrets, fetch: doFetch = globalThis.fetch
     if (!key && !p.keyOptional) throw new CloudError(`No ${p.name} key is saved — add one on the Agent page.`, { provider });
     const base = baseOf(p);
     const q = quirks.get(`${provider}|${model}`) || {};
-    const streaming = typeof onDelta === "function";
-
     for (let attempt = 0; attempt < 5; attempt++) {
+      const streaming = typeof onDelta === "function" && !q.noStream;
       let url, body;
       if (p.wire === "anthropic") {
         url = `${base}/messages`;
@@ -483,6 +482,9 @@ export function createCloud({ config, secrets, fetch: doFetch = globalThis.fetch
         const { text, inTok, outTok } = streaming
           ? await callStream(p, url, init, timeoutMs, onDelta)
           : readReply(p, await call(p, url, init, timeoutMs));
+        if (!streaming && typeof onDelta === "function" && text) {
+          try { onDelta({ kind: "text", text }); } catch { /* a watcher never breaks the reply */ }
+        }
         await addUsage(provider, inTok, outTok);
         if (!text.trim()) throw new CloudError(`${p.name} returned an empty reply from ${model}.`, { provider });
         return text;
@@ -500,6 +502,9 @@ export function createCloud({ config, secrets, fetch: doFetch = globalThis.fetch
         }
         if (e.status === 400 && body.stream_options && /stream_options|include_usage/.test(said)) {
           q.noStreamUsage = true; quirks.set(`${provider}|${model}`, q); continue;
+        }
+        if (e.status === 400 && body.stream && /\bstream(?:ing)?\b/.test(said)) {
+          q.noStream = true; quirks.set(`${provider}|${model}`, q); continue;
         }
         throw e;
       }

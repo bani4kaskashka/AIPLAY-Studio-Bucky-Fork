@@ -102,6 +102,15 @@ export function loraTarget(allKeys, shapes = {}) {
   if (has("text_fusion.") || has("txtfusion.")) return { variant: "Krea 2", confidence: "certain" };
   if (has("adaln_single")) return { variant: "LTX", confidence: "certain" };
 
+  /* MOSS combines attention and fused feed-forward projections under the same
+   * layers.N.proj namespace. A generic layers/to_q name alone proves nothing.
+   * Native ComfyUI files use diffusion_model.; PEFT needs conversion. */
+  const mossLayers = new Set(base.map((key) => key.match(/^layers\.(\d+)\.proj\.ffn_up_gate$/)?.[1]).filter((n) => n !== undefined));
+  if (base.some((key) => { const match = key.match(/^layers\.(\d+)\.proj\.q$/); return match && mossLayers.has(match[1]); })) {
+    const native = allKeys.filter((key) => /layers\.\d+\.proj\./.test(key)).every((key) => key.startsWith("diffusion_model."));
+    return { variant: native ? "MOSS-Image" : "MOSS-Image (convert Diffusers namespace for ComfyUI)", confidence: "certain" };
+  }
+
   if (has("input_blocks") || has("output_blocks") || has("middle_block")) {
     /* SD1.5 and SDXL are BOTH classic UNets and share their module names, so
      * the name alone cannot separate them. The cross-attention context width
@@ -233,6 +242,8 @@ export function detect(keys, shapes) {
   if (has(k("head.modulation"))) return { family: "wan2.x", confidence: "certain", companions };
   if (has(k("caption_projection.0.linear.weight"))) return { family: "hidream", confidence: "certain", companions };
   if (has(k("embed_image_indicator.weight"))) return { family: "ideogram4", confidence: "certain", companions };
+  if (has(k("shared_block_modulation.weight")) && has(k("layers.0.proj.ffn_up_gate.weight")))
+    return { family: "moss-image", variant: "MOSS-Image", confidence: "certain", companions };
   if (has(k("txtfusion.projector.weight"))) return { family: "krea2", variant: "Krea 2", confidence: "certain", companions };
   if (has(k("core.pixel_embedder.proj.weight"))) return { family: "pixeldit-t2i", confidence: "certain", companions };
 
@@ -464,7 +475,7 @@ export function loadableAs(probe) {
    * a DiT sitting in models/checkpoints is invisible to it no matter which
    * engine is picked. */
   const ENGINE_FOR = { anima: "Anima", zimage: "Z-Image", "zimage-pixel": "Z-Image",
-                       flux1: "FLUX.1", flux2: "FLUX.2", ideogram4: "Ideogram 4", "qwen-image-2.1": "Qwen Image 2.1" };
+                       flux1: "FLUX.1", flux2: "FLUX.2", ideogram4: "Ideogram 4", "qwen-image-2.1": "Qwen Image 2.1", "moss-image": "MOSS-Image" };
   const engine = ENGINE_FOR[f];
   return {
     engine: engine ? f : null, ok: false,

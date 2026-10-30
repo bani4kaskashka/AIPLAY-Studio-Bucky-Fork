@@ -42,6 +42,8 @@
  * models_for_this_machine also returns.
  */
 
+import { revealSetting } from './settings-sections.js';
+
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 /* Base 1000, matching web/app.js's own `gb` and Windows Explorer, because the
@@ -212,6 +214,16 @@ export function paintFit(d, root = document) {
     : `<b class="fitok">Nothing to download</b>`;
 
   const wasOpen = box.open === true;
+  const noteRow = (n) => `
+    <div class="fitnote">
+      <b>${esc(n.headline)}</b>
+      <p>${esc(n.detail)}</p>
+      ${insteadRow(n, root)}
+      ${n.optional && n.id === "videoLtx" ? `<button type="button" class="edtool sm" data-local-model-access="videoLtx">Set up LTX</button>` : ""}
+      ${n.url ? `<p><a href="${esc(n.url)}" target="_blank" rel="noopener">Open the model page</a></p>` : ""}
+    </div>`;
+  const requiredNotes = (rec.notes || []).filter((n) => !n.optional);
+  const optionalNotes = (rec.notes || []).filter((n) => n.optional);
   box.innerHTML = `
     <summary class="fithead">
       <h3>For this machine</h3>
@@ -229,17 +241,10 @@ export function paintFit(d, root = document) {
     ${rec.picks?.length ? `<div class="fitpicks">${rec.picks.map((p) => pickRow(p, states)).join("")}</div>` : ""}
     ${rec.picks?.length ? `<p class="fittotal">${need}
       ${rec.bytesNote ? `<span class="hint">${esc(rec.bytesNote)}</span>` : ""}</p>` : ""}
-    ${/* The notes are where the honest bad news goes, and it is never hidden
-         behind a click. The one that matters most: LTX 2.5 is the better video
-         engine and Studio cannot fetch it, so it appears here with the
-         publisher's own steps rather than as a row with a button that 401s. */
-      rec.notes?.length ? `<div class="fitnotes">${rec.notes.map((n) => `
-        <div class="fitnote">
-          <b>${esc(n.headline)}</b>
-          <p>${esc(n.detail)}</p>
-          ${insteadRow(n, root)}
-          ${n.url ? `<p><a href="${esc(n.url)}" target="_blank" rel="noopener">Open the model page</a></p>` : ""}
-        </div>`).join("")}</div>` : ""}
+    ${/* Hardware limitations stay visible. Optional account setup is separate
+         from the recommended installation and has an actionable Models link. */
+      requiredNotes.length ? `<div class="fitnotes">${requiredNotes.map(noteRow).join("")}</div>` : ""}
+    ${optionalNotes.length ? `<details class="more fitnotes"><summary>Optional video models</summary>${optionalNotes.map(noteRow).join("")}</details>` : ""}
     ${/* pip packages are not downloads and the screen has always half-admitted
          it. The command is the server's, filled in with the interpreter Studio
          really spawns, so it can be copied rather than adapted. */
@@ -285,7 +290,11 @@ export function initFit(root = document) {
     const go = e.target.closest?.("[data-fitview]");
     if (go) {
       root.querySelector(`.nav a[data-view="${CSS.escape(go.dataset.fitview)}"]`)?.click();
-      if (go.dataset.fitview === "settings") root.getElementById("set-hosted")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (go.dataset.fitview === "settings") {
+        const setting = root.getElementById("set-hosted");
+        revealSetting(setting);
+        setting?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
       return;
     }
     const b = e.target.closest?.("[data-fitgoto]");

@@ -111,6 +111,7 @@ export const ROUTABLE = {
   studio_status: null,
   community_feed: null,
   engine_status: null,
+  engine_updates: null,
   engine_activity: null,
   engine_nodes: null,
   provenance_read: null,
@@ -172,6 +173,7 @@ export const ROUTABLE = {
   collab_drop: "destroys",
   collab_plan: null,
   qwen_image_status: null,
+  moss_image_status: null,
   image_capabilities: null,
   image_document_preview: null,
   image_ai_edit_create: "gpu",
@@ -406,6 +408,7 @@ export const ROUTABLE = {
 
   /* clips and video */
   list_clips: null,
+  clip_favorite: null,
   video_quality: null,
   /* Its set path SAVES Video Lab defaults every later render reads (sparse
    * attention on Fast among them), so it asks first, with its own sentence. */
@@ -668,6 +671,8 @@ export const WITHHELD = {
   vfx_render_job: "One tool both cancels existing work and retries an expensive render. Its operation-specific approval cannot be represented by this chat's single per-tool gate; use the render queue or MCP explicitly.",
   cancel_download: "the twin of download_model, which is withheld for the same reason: what the Models page's buttons do stays with the person at that page",
   engine_run_graph: "runs an arbitrary graph on the card; nothing in a sentence typed into a chat box should assemble one",
+  engine_update_comfyui: "downloads a separate Python and PyTorch environment and changes the running engine; review its version and disk costs in Engine > Updates or explicitly request it through external MCP",
+  engine_restore_comfyui: "changes the selected engine and restarts it; use Engine > Updates or an explicitly requested external MCP restoration",
   engine_stop: "stops work that is very likely the person's own render, from a model that cannot see what is running",
   engine_reveal_port: "hands out the engine's port and writes a dated line saying it did; that is a decision for a person",
   engine_hash_models: "turns on a real ongoing cost across every future run",
