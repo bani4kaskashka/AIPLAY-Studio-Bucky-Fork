@@ -62,7 +62,7 @@ function redactedEventRows(rows) {
   return rows.slice(-24).map(row => {
     const result = {};
     for (const key of ['event', 'kind']) if (typeof row?.[key] === 'string') result[key] = redactedDiagnosticText(row[key], 64);
-    for (const key of ['hostPid', 'childPid', 'childCount', 'status']) if (Number.isSafeInteger(row?.[key])) result[key] = row[key];
+    for (const key of ['hostPid', 'childPid', 'childCount', 'status', 'attempts']) if (Number.isSafeInteger(row?.[key])) result[key] = row[key];
     if (typeof row?.opened === 'boolean') result.opened = row.opened;
     return result;
   });

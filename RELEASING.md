@@ -135,7 +135,8 @@ The native workflow mounts the actual disk image, copies and unmounts the app,
 checks its private runtime, and exercises installation of the tested full
 source SHA in an isolated home with spaces. It covers repair with custom
 workflow/settings preservation, the real launcher and Studio/DAW CPU startup,
-two ordinary Finder reopen requests through the same native host and child,
+two ordinary Finder reopen requests through the same native host and child
+(the host retries a refused browser hand-off up to four times),
 and keeping user files after removal of the copied app. Native runners cover
 macOS 14/26 on Apple silicon and macOS 15 on Intel. These checks do not certify
 quarantined-download approval, GPU engines or model output quality.
